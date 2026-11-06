@@ -106,7 +106,6 @@ svg text { fill: var(--muted); font-size: 11px; }
 <header>
   <img src="img/logo.jpg" alt="Ambiental Transportes" class="logo">
   <h1>Planejamento de Rotas</h1>
-  <span class="tag warn" id="tagFicticio">dados fictícios</span>
   <span class="sp"></span>
   <span class="small muted">Data (simulada): <b id="hojeTxt"></b></span>
   <button class="b" id="btnAvancar" title="Simula a passagem do dia: a rota planejada é considerada executada">Avançar dia ▸</button>
@@ -308,7 +307,7 @@ svg text { fill: var(--muted); font-size: 11px; }
       <div class="card"><h2>Backup e dados</h2>
         <div class="row"><button class="b" id="bkExport">Exportar arquivo (.json)</button>
           <label class="b">Importar arquivo<input type="file" id="bkImport" accept=".json" style="display:none"></label>
-          <button class="b" id="bkReset">Gerar novos dados fictícios</button></div></div>
+          <button class="b" id="bkReset">Apagar todos os dados</button></div></div>
     </div>
   </section>
 </main>

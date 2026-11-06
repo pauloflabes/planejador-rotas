@@ -67,80 +67,7 @@
     return [km, km / vel * 60];
   }
 
-  // ---------------------------------------------------------------- dados fictícios
-  function rng(seed) {
-    let a = seed >>> 0;
-    return function () { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-  }
-  function gauss(r) { return Math.sqrt(-2 * Math.log(r() + 1e-12)) * Math.cos(2 * Math.PI * r()); }
-
   const GARAGEM = { nome: 'Garagem', endereco: 'Av. Hiroschi Aramaki, 230 — Residencial 2000, Uberaba/MG', lat: -19.77139, lng: -47.88806 };
-
-  function gerarFicticios(hoje, seed) {
-    const r = rng(seed || 2026);
-    const sob = ['Silva', 'Souza', 'Oliveira', 'Costa', 'Pereira', 'Almeida', 'Ribeiro', 'Carvalho', 'Gomes', 'Martins', 'Araújo', 'Barbosa',
-      'Rocha', 'Dias', 'Moreira', 'Nunes', 'Teixeira', 'Mendes', 'Freitas', 'Cardoso', 'Lopes', 'Ramos', 'Vieira', 'Castro', 'Pinto',
-      'Correia', 'Monteiro', 'Moura', 'Campos', 'Batista', 'Fonseca', 'Prado', 'Rezende', 'Borges', 'Machado'];
-    const bairrosSaude = [[-19.7484, -47.9318, 0.006], [-19.7560, -47.9420, 0.005], [-19.7380, -47.9400, 0.005], [-19.7640, -47.9290, 0.005],
-      [-19.7380, -47.9180, 0.005], [-19.7330, -47.9550, 0.006], [-19.7520, -47.9520, 0.005], [-19.7750, -47.9400, 0.006],
-      [-19.7714, -47.8950, 0.006], [-19.7600, -47.9100, 0.006], [-19.7250, -47.9350, 0.006], [-19.7850, -47.9200, 0.006]];
-    const bairrosInd = [[-19.7230, -47.9690, 0.008], [-19.7820, -47.9750, 0.008], [-19.7050, -47.9050, 0.008], [-19.7900, -47.8950, 0.007]];
-    const cidades = [['Sacramento', -19.8653, -47.4400, 12], ['Conceição das Alagoas', -19.9147, -48.3836, 10], ['Delta', -19.9722, -47.7764, 6],
-      ['Conquista', -19.9356, -47.5442, 6], ['Veríssimo', -19.6650, -48.3100, 4], ['Água Comprida', -20.0578, -48.1103, 4]];
-    const cats = [
-      // nome, tipo, qtd, frequências possíveis, kg [min,max], serviço (min)
-      ['Hospital', 'saude', 8, ['2x'], [90, 220], 20],
-      ['Laboratório', 'saude', 20, ['semanal'], [15, 50], 10],
-      ['Clínica Médica', 'saude', 60, ['quinzenal', 'mensal'], [5, 30], 8],
-      ['Consultório Odontológico', 'saude', 80, ['mensal', 'bimestral'], [2, 10], 6],
-      ['Clínica Veterinária', 'saude', 35, ['quinzenal', 'mensal'], [8, 40], 8],
-      ['Drogaria', 'saude', 40, ['mensal', 'bimestral'], [2, 12], 6],
-      ['UBS', 'saude', 15, ['semanal', 'quinzenal'], [15, 60], 10],
-      ['Estúdio de Tatuagem', 'saude', 10, ['bimestral'], [1, 5], 5],
-      ['Indústria', 'industrial', 40, ['quinzenal', 'mensal', 'mensal', 'demanda'], [50, 400], 15],
-      ['Oficina Mecânica', 'industrial', 30, ['mensal', 'bimestral'], [20, 120], 10],
-      ['Gráfica', 'industrial', 10, ['bimestral', 'demanda'], [15, 80], 10],
-      ['Posto de Combustível', 'industrial', 10, ['mensal'], [30, 150], 10],
-    ];
-    const hojeN = dnum(hoje);
-    const out = [];
-    let id = 1;
-    const pick = (a) => a[(r() * a.length) | 0];
-    function criar(cat, lat, lng, cidade) {
-      const [nome, tipo, , freqs, kg, svc] = cat;
-      const freq = pick(freqs);
-      const f = FREQ[freq];
-      let ult = null;
-      if (f.intervalo) {
-        let back = 1 + ((r() * Math.max(1, Math.round(f.intervalo))) | 0);
-        let n = hojeN - back;
-        while (wday(n) === 0 || wday(n) === 6) n--;
-        ult = dstr(n);
-      }
-      out.push({
-        id: 'C' + String(id++).padStart(4, '0'), nome: `${nome} ${pick(sob)} (fictício)`, tipo, freq, tol: null,
-        cidade, endereco: `Endereço fictício nº ${100 + ((r() * 1900) | 0)} — ${cidade}/MG`,
-        lat: +lat.toFixed(6), lng: +lng.toFixed(6), kg: Math.round(kg[0] + r() * (kg[1] - kg[0])), servico: svc,
-        ultimaColeta: ult, inicio: null, ativo: true, ficticio: true,
-      });
-    }
-    for (const cat of cats) {
-      const pool = cat[1] === 'industrial' ? bairrosInd.concat(bairrosSaude.slice(0, 3)) : bairrosSaude;
-      for (let i = 0; i < cat[2]; i++) {
-        const b = pick(pool);
-        let lat = b[0] + gauss(r) * b[2], lng = b[1] + gauss(r) * b[2];
-        lat = Math.min(-19.69, Math.max(-19.80, lat)); lng = Math.min(-47.87, Math.max(-48.00, lng));
-        criar(cat, lat, lng, 'Uberaba');
-      }
-    }
-    for (const [cid, la, ln, q] of cidades) {
-      for (let i = 0; i < q; i++) {
-        const cat = pick([cats[2], cats[3], cats[4], cats[5], cats[8], cats[9]]);
-        criar(cat, la + gauss(r) * 0.006, ln + gauss(r) * 0.006, cid);
-      }
-    }
-    return out;
-  }
 
   function estadoInicial(hoje) {
     hoje = hoje || new Date().toISOString().slice(0, 10);
@@ -154,11 +81,12 @@
         aviso: 5, penMudancaProx: 8, penMudancaLonge: 1.5, Pcap: 50, Ptime: 2, Pun: 400, Pgap: 4, Patraso: 150, atrasoMax: 5,
         tempoDiario: 20, tempoCompleto: 60, fatorDesvio: 1.35, seed: 7,
       },
+      // valores provisórios: ajuste capacidade e consumo em "Frota e eventos"
       veiculos: [
-        { id: 'v1', nome: 'Veículo 1 (utilitário)', placa: 'AAA-0001', capacidade: 700, consumo: 10, jornada: 480, tipos: ['saude', 'industrial'] },
-        { id: 'v2', nome: 'Veículo 2 (caminhão 3/4)', placa: 'AAA-0002', capacidade: 3000, consumo: 6, jornada: 480, tipos: ['saude', 'industrial'] },
+        { id: 'v1_CPN3G98', nome: 'CPN3G98', placa: 'CPN3G98', capacidade: 1500, consumo: 8, jornada: 480, tipos: ['saude', 'industrial'] },
+        { id: 'v2_RUV0C87', nome: 'RUV0C87', placa: 'RUV0C87', capacidade: 1500, consumo: 8, jornada: 480, tipos: ['saude', 'industrial'] },
       ],
-      clientes: gerarFicticios(hoje, 2026),
+      clientes: [],
       feriados: feriadosPadrao([ano, ano + 1]),
       indisponibilidades: [],
       avulsas: [],
@@ -433,7 +361,7 @@
     return { n, dist, time, coords };
   }
 
-  const api = { temCoord, matrizIds, dnum, dstr, wday, fmtCurto, fmtData, DIAS_SEM, FREQ, PADROES_2X, feriadosPadrao, haversine, estimativa, gerarFicticios, estadoInicial, calendario, montarProblema, aplicarResultado, ultimoConfirmado, GARAGEM };
+  const api = { temCoord, matrizIds, dnum, dstr, wday, fmtCurto, fmtData, DIAS_SEM, FREQ, PADROES_2X, feriadosPadrao, haversine, estimativa, estadoInicial, calendario, montarProblema, aplicarResultado, ultimoConfirmado, GARAGEM };
   root.Modelo = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

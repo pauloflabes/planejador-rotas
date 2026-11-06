@@ -21,7 +21,8 @@
 
   // ------------------------------------------------------------------ estado
   let st = A.Local.carregar();
-  if (!st || st.versao !== 1) st = M.estadoInicial(hojeReal());
+  // começa em branco (e descarta dados fictícios de versões antigas do protótipo)
+  if (!st || st.versao !== 1 || (st.clientes.length && st.clientes.every(c => c.ficticio))) st = M.estadoInicial(hojeReal());
   let matriz = A.Local.carregarMatriz();
   let mapCli = new Map();
   const idxCli = () => { mapCli = new Map(st.clientes.map(c => [c.id, c])); };
@@ -147,7 +148,6 @@
 
   function renderCabecalho() {
     $('hojeTxt').textContent = M.fmtCurto(st.params.hoje) + '/' + st.params.hoje.slice(0, 4);
-    $('tagFicticio').style.display = st.clientes.some(c => c.ficticio) ? '' : 'none';
     const t = $('syncTag');
     if (!Sync.ativo()) { t.textContent = 'somente local'; t.className = 'tag'; }
     else if (syncErro) { t.textContent = 'sincronização: ' + syncErro; t.className = 'tag bad'; }
@@ -160,7 +160,10 @@
     const b = $('bannerArea');
     let h = '';
     if (viaDisco) h += `<div class="banner warn">O programa foi aberto direto do arquivo. Para a busca de endereços e as distâncias pelas ruas funcionarem, abra pelo <b>iniciar.bat</b> (ou pelo endereço publicado).</div>`;
-    if (!st.plano) h += `<div class="banner warn">Ainda não há plano de rotas. <button class="b p" data-acao="zero">Otimizar agora</button></div>`;
+    if (!st.clientes.some(c => c.ativo)) h += `<div class="banner"><div><b>Bem-vindo ao Planejamento de Rotas.</b> Ainda não há clientes cadastrados.
+      Importe os relatórios do meuResíduo ou cadastre os clientes um a um. ${Sync.ativo() ? '' : 'Se a equipe já usa a sincronização, entre com seu login em Configurações → Sincronização.'}</div>
+      <button class="b p" data-acao="importar">Importar do meuResíduo</button><button class="b" data-acao="novo">Cadastrar cliente</button></div>`;
+    else if (!st.plano) h += `<div class="banner warn">Ainda não há plano de rotas. <button class="b p" data-acao="zero">Otimizar agora</button></div>`;
     else if (st.planoDesatualizado) h += `<div class="banner warn">Houve alterações desde a última otimização. <button class="b p" data-acao="quente">Reotimizar</button></div>`;
     if (conflitoSync) h += `<div class="banner warn">A nuvem tem uma versão mais nova (salva em ${new Date(conflitoSync).toLocaleString('pt-BR')}).
       <button class="b" data-acao="baixar">Carregar a versão da nuvem</button><button class="b" data-acao="forcar">Sobrescrever a nuvem com a minha</button></div>`;
@@ -168,6 +171,7 @@
     b.querySelectorAll('button').forEach(x => x.onclick = () => {
       const a = x.dataset.acao;
       if (a === 'zero') otimizar('zero', 'Primeiro plano');
+      else if (a === 'importar' || a === 'novo') irPara(a);
       else if (a === 'quente') otimizar('quente', 'Alterações de cadastro');
       else if (a === 'baixar') baixarNuvem(true);
       else if (a === 'forcar') enviarNuvem(true);
@@ -927,8 +931,7 @@
       const arqs = { clientes: await ler('impCli'), contratos: await ler('impCon'), coletas: await ler('impCol'), rotas: await ler('impRot') };
       const anteriores = st.clientes.filter(c => c.origem === 'meuResíduo');
       const res = Importar.processar(arqs, anteriores);
-      const ficticios = st.clientes.some(c => c.ficticio);
-      if (!confirm(`Importar ${res.clientes.length} clientes do meuResíduo?${ficticios ? ' Os dados fictícios serão apagados.' : ' O plano atual será refeito.'}`)) { $('impRes').innerHTML = ''; return; }
+      if (!confirm(`Importar ${res.clientes.length} clientes do meuResíduo?${st.clientes.length ? ' O plano atual será refeito.' : ''}`)) { $('impRes').innerHTML = ''; return; }
       st.clientes = res.clientes;
       Importar.aplicarCache(st.clientes, geoCache);
       st.historico = res.historico;
@@ -1058,17 +1061,19 @@
     } catch (err) { alerta('Falha ao importar: ' + err.message); }
     e.target.value = '';
   };
-  $('bkReset').onclick = async () => {
-    if (!confirm('Apagar os dados atuais e gerar 400 clientes fictícios novos?')) return;
-    st = M.estadoInicial(hojeReal()); idxCli(); edicao = null; salvar(); renderTudo();
-    await otimizar('zero', 'Dados fictícios novos');
+  $('bkReset').onclick = () => {
+    const nuvem = Sync.ativo() ? ' A sincronização está ativa: os dados também serão apagados na nuvem, para toda a equipe.' : '';
+    if (!confirm(`Apagar todos os clientes, rotas e o plano? Parâmetros, veículos e feriados são mantidos.${nuvem} Sugestão: exporte um backup antes.`)) return;
+    const novo = M.estadoInicial(hojeReal());
+    ['params', 'veiculos', 'feriados', 'garagem'].forEach(k => { novo[k] = st[k]; });
+    novo.params.hoje = hojeReal();
+    st = novo; idxCli(); edicao = null; salvar(); renderTudo();
   };
 
   // ------------------------------------------------------------------ início
   renderTudo();
   (async () => {
     if (Sync.ativo()) await baixarNuvem(false);
-    if (!st.plano && st.clientes.some(c => c.ficticio)) await otimizar('zero', 'Primeiro plano');
   })();
   window.__app = { get st() { return st; }, otimizar };
 })();
