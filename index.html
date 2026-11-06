@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Planejamento de Rotas</title>
+<link rel="icon" href="img/logo.jpg">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+:root {
+  --bg: #f5f6f8; --panel: #ffffff; --text: #1d2330; --muted: #5f6878; --line: #dde1e7;
+  --accent: #1f6feb; --accent-ink: #ffffff; --ok: #1a7f37; --warn: #b26b00; --bad: #c62828;
+  --chip: #eef2f7; --hol: #f1f1f1; --shadow: 0 1px 2px rgba(0,0,0,.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12151b; --panel: #1b1f27; --text: #e6e9ef; --muted: #9aa3b2; --line: #2d333d;
+    --accent: #4c8dff; --accent-ink: #0b0d12; --ok: #4cc26b; --warn: #e2a33c; --bad: #ff6b6b;
+    --chip: #262c36; --hol: #20242c; --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12151b; --panel: #1b1f27; --text: #e6e9ef; --muted: #9aa3b2; --line: #2d333d;
+  --accent: #4c8dff; --accent-ink: #0b0d12; --ok: #4cc26b; --warn: #e2a33c; --bad: #ff6b6b;
+  --chip: #262c36; --hol: #20242c; --shadow: none;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 1000; }
+header h1 { font-size: 17px; margin: 0; letter-spacing: .2px; }
+header .logo { height: 42px; width: 42px; object-fit: contain; border-radius: 6px; background: #fff; }
+header { border-bottom: 3px solid #d7262e; }
+header .sp { flex: 1; }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--chip); color: var(--muted); font-size: 12px; }
+.tag.warn { color: var(--warn); } .tag.ok { color: var(--ok); } .tag.bad { color: var(--bad); }
+.layout { display: flex; align-items: flex-start; }
+main { flex: 1; min-width: 0; padding: 16px; max-width: 1400px; margin: 0 auto; }
+nav { order: 0; flex: none; width: 214px; display: flex; flex-direction: column; gap: 2px; padding: 12px 8px; background: var(--panel);
+  border-right: 1px solid var(--line); position: sticky; top: 66px; height: calc(100vh - 66px); overflow-y: auto; }
+nav button { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: none; border: 0; padding: 9px 12px; border-radius: 8px; color: var(--muted); cursor: pointer; font: inherit; }
+nav button:hover { background: var(--chip); color: var(--text); }
+nav button.on { background: var(--chip); color: var(--text); font-weight: 600; box-shadow: inset 3px 0 0 #d7262e; }
+nav svg { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.subtabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.subtabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 12px; color: var(--muted); cursor: pointer; font: inherit; margin-bottom: -1px; }
+.subtabs button.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.cal .c.hit { outline: 3px solid var(--accent); outline-offset: -1px; }
+.cal .c .alvo { display: block; margin-top: 3px; font-weight: 600; color: var(--accent); }
+@media (max-width: 800px) {
+  .layout { display: block; }
+  main { padding: 10px 16px 84px; }
+  nav { position: fixed; bottom: 0; left: 0; right: 0; top: auto; width: auto; height: auto; flex-direction: row; justify-content: space-between;
+    border-right: 0; border-top: 1px solid var(--line); padding: 4px; z-index: 1500; overflow-x: auto; }
+  nav button { flex-direction: column; gap: 2px; padding: 6px 2px; font-size: 10px; text-align: center; min-width: 44px; }
+  nav button.on { box-shadow: inset 0 -3px 0 #d7262e; }
+  nav button span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 64px; }
+  header h1 { font-size: 15px; }
+}
+section { display: none; } section.on { display: block; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; box-shadow: var(--shadow); margin-bottom: 14px; }
+.card h2 { font-size: 15px; margin: 0 0 10px; } .card h3 { font-size: 14px; margin: 12px 0 6px; }
+.grid { display: grid; gap: 12px; } .g4 { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); } .g2 { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+.kpi .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; } .kpi .l { color: var(--muted); font-size: 12px; }
+.muted { color: var(--muted); } .small { font-size: 12px; } .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+button.b, .b { background: var(--chip); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 6px 12px; cursor: pointer; font: inherit; }
+button.p { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button.b:disabled { opacity: .5; cursor: default; }
+button.x { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 15px; padding: 0 4px; }
+input, select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+label.f { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+.tbl { max-height: 560px; overflow: auto; }
+.map { height: 460px; border-radius: 8px; border: 1px solid var(--line); }
+.cal { display: grid; gap: 6px; }
+.cal .h { font-size: 12px; color: var(--muted); text-align: center; }
+.cal .c { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px; min-height: 86px; cursor: pointer; font-size: 12px; }
+.cal .c:hover { border-color: var(--accent); }
+.cal .c.hol { background: var(--hol); cursor: default; color: var(--muted); }
+.cal .c.past { opacity: .55; }
+.cal .c.conf { border-color: var(--ok); }
+.cal .c .d { font-weight: 650; display: flex; justify-content: space-between; }
+.vline { display: flex; align-items: center; gap: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+.stops { margin: 0; padding-left: 0; list-style: none; }
+.stops li { display: flex; gap: 6px; align-items: baseline; padding: 4px 0; border-bottom: 1px dashed var(--line); }
+.stops li .i { width: 22px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+.stops li .nm { flex: 1; }
+.banner { padding: 8px 12px; border-radius: 8px; background: var(--chip); margin-bottom: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.banner.warn { border-left: 4px solid var(--warn); }
+#modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: center; justify-content: center; z-index: 2000; padding: 16px; }
+#modal.on { display: flex; }
+#modal .box { background: var(--panel); border-radius: 12px; padding: 18px; width: min(460px, 100%); border: 1px solid var(--line); }
+.bar { height: 8px; background: var(--chip); border-radius: 99px; overflow: hidden; margin: 10px 0; }
+.bar > div { height: 100%; background: var(--accent); width: 0; transition: width .2s; }
+.num-icon { background: var(--panel); border: 2px solid; border-radius: 50%; font-size: 10px; font-weight: 700; text-align: center; line-height: 16px; width: 20px !important; height: 20px !important; color: var(--text); }
+pre.sql { background: var(--bg); padding: 8px; border-radius: 6px; overflow: auto; font-size: 12px; border: 1px solid var(--line); }
+svg text { fill: var(--muted); font-size: 11px; }
+@media (max-width: 700px) { .map { height: 320px; } main { padding: 10px 16px; } .cal .c { min-height: 60px; } }
+</style>
+</head>
+<body>
+<header>
+  <img src="img/logo.jpg" alt="Ambiental Transportes" class="logo">
+  <h1>Planejamento de Rotas</h1>
+  <span class="tag warn" id="tagFicticio">dados fictícios</span>
+  <span class="sp"></span>
+  <span class="small muted">Data (simulada): <b id="hojeTxt"></b></span>
+  <button class="b" id="btnAvancar" title="Simula a passagem do dia: a rota planejada é considerada executada">Avançar dia ▸</button>
+  <span class="tag" id="syncTag">somente local</span>
+</header>
+<div class="layout">
+<nav id="nav" aria-label="Menu">
+  <button data-v="painel" class="on" title="Início"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/></svg><span>Início</span></button>
+  <button data-v="calendario" title="Calendário"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg><span>Calendário</span></button>
+  <button data-v="dia" title="Rota do dia"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h8a3 3 0 0 0 0-6H8a3 3 0 0 1 0-6h8"/></svg><span>Rota do dia</span></button>
+  <button data-v="clientes" title="Clientes"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14.5a5 5 0 0 1 5.5 5"/></svg><span>Clientes</span></button>
+  <button data-v="frota" title="Frota e eventos"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 6h11v10H2z"/><path d="M13 9h4l4 4v3h-8z"/><circle cx="6" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg><span>Frota e eventos</span></button>
+  <button data-v="avulsas" title="Coletas avulsas"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M12 8v8M8 12h8"/></svg><span>Coletas avulsas</span></button>
+  <button data-v="historico" title="Histórico real"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg><span>Histórico real</span></button>
+  <button data-v="config" title="Configurações"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Configurações</span></button>
+</nav>
+<main>
+  <div id="bannerArea"></div>
+
+  <section id="v-painel" class="on">
+    <div class="card" id="proxRevisao"></div>
+    <div class="card">
+      <h2>Plano dos próximos <span id="horizTxt"></span> dias</h2>
+      <div class="grid g4" id="kpis"></div>
+      <div class="row" style="margin-top:12px">
+        <button class="b p" id="btnReotimizar">Reotimizar a partir do plano atual</button>
+        <button class="b" id="btnOtimizarZero">Otimizar do zero</button>
+        <span class="small muted" id="ultimaOtim"></span>
+      </div>
+    </div>
+    <div class="grid g2">
+      <div class="card"><h2>Comparação com a referência</h2><div id="comparacao"></div></div>
+      <div class="card"><h2>Convergência da última otimização</h2><div id="convergencia"></div></div>
+    </div>
+    <div class="card"><h2>Pendências e alertas</h2><div id="alertas"></div></div>
+  </section>
+
+  <section id="v-calendario">
+    <div class="card">
+      <div class="row" style="justify-content:space-between;margin-bottom:8px">
+        <h2 style="margin:0">Calendário de rotas</h2>
+        <span class="small muted">Clique em um dia para ver a rota. Borda verde = rota confirmada.</span>
+      </div>
+      <div class="row" style="margin-bottom:10px">
+        <label class="f">Buscar cliente<input id="calBusca" list="dlClientes" placeholder="digite o nome ou o código" style="min-width:300px"></label>
+        <button class="b" id="calLimpar">Limpar</button>
+      </div>
+      <div id="calBuscaRes" class="small" style="margin-bottom:10px"></div>
+      <div id="legendaV" class="row small" style="margin-bottom:8px"></div>
+      <div id="cal"></div>
+    </div>
+  </section>
+
+  <section id="v-dia">
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <div class="row">
+          <button class="b" id="diaAnt">◂</button>
+          <select id="diaSel"></select>
+          <button class="b" id="diaProx">▸</button>
+          <span id="diaStatus"></span>
+        </div>
+        <div class="row">
+          <button class="b" id="btnRuas" title="Desenha o trajeto pelas ruas usando o servidor público do OSRM">Traçar pelas ruas</button>
+        </div>
+      </div>
+    </div>
+    <div class="grid g2">
+      <div class="card"><div id="mapaDia" class="map"></div><div class="small muted" style="margin-top:6px" id="mapaNota"></div></div>
+      <div class="card" id="diaRotas"></div>
+    </div>
+  </section>
+
+  <section id="v-clientes">
+    <div class="subtabs"><button data-v="clientes">Lista de clientes</button><button data-v="novo">+ Novo cliente</button></div>
+    <div class="card">
+      <div class="row" style="margin-bottom:10px">
+        <label class="f">Buscar<input id="cliBusca" placeholder="nome, código, cidade"></label>
+        <label class="f">Frequência<select id="cliFreq"><option value="">todas</option></select></label>
+        <label class="f">Tipo<select id="cliTipo"><option value="">todos</option><option value="saude">saúde</option><option value="industrial">industrial</option></select></label>
+        <label class="f">Situação<select id="cliSit"><option value="ativos">ativos</option><option value="inativos">inativos</option><option value="geo">ativos com localização a conferir</option><option value="">todos</option></select></label>
+        <span class="small muted" id="cliCont"></span>
+      </div>
+      <div class="tbl"><table id="cliTab"></table></div>
+    </div>
+    <div class="card" id="cliEdit" style="display:none"></div>
+  </section>
+
+  <section id="v-novo">
+    <div class="subtabs"><button data-v="clientes">Lista de clientes</button><button data-v="novo">+ Novo cliente</button></div>
+    <div class="grid g2">
+      <div class="card">
+        <h2>Novo cliente</h2>
+        <div class="grid" style="grid-template-columns:1fr 1fr;gap:8px">
+          <label class="f" style="grid-column:1/3">Nome<input id="nvNome"></label>
+          <label class="f" style="grid-column:1/3">Endereço<input id="nvEnd" placeholder="Rua, número, bairro"></label>
+          <label class="f">Cidade<input id="nvCidade" value="Uberaba"></label>
+          <label class="f">Tipo<select id="nvTipo"><option value="saude">saúde</option><option value="industrial">industrial</option></select></label>
+          <label class="f">Frequência<select id="nvFreq"></select></label>
+          <label class="f">Tolerância (± dias)<input id="nvTol" type="number" min="0" placeholder="padrão"></label>
+          <label class="f">Resíduo por coleta (kg)<input id="nvKg" type="number" value="20"></label>
+          <label class="f">Tempo de atendimento (min)<input id="nvSvc" type="number" value="8"></label>
+          <label class="f">Latitude<input id="nvLat"></label>
+          <label class="f">Longitude<input id="nvLng"></label>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="b" id="nvGeo">Localizar endereço</button>
+          <span class="small muted">ou clique no mapa para marcar o local</span>
+        </div>
+        <div class="row" style="margin-top:10px"><button class="b p" id="nvSugerir">Sugerir encaixes nas rotas</button></div>
+        <div id="nvRes" style="margin-top:12px"></div>
+      </div>
+      <div class="card"><div id="mapaNovo" class="map"></div></div>
+    </div>
+  </section>
+
+  <section id="v-frota">
+    <div class="card"><h2>Veículos</h2><div id="frotaTab"></div>
+      <div class="row" style="margin-top:8px"><button class="b" id="addVeic">+ Veículo</button></div></div>
+    <div class="card"><h2>Veículo inoperante</h2>
+      <div class="row">
+        <label class="f">Veículo<select id="indVeic"></select></label>
+        <label class="f">De<input type="date" id="indDe"></label>
+        <label class="f">Até<input type="date" id="indAte"></label>
+        <label class="f">Motivo<input id="indMot" placeholder="manutenção, quebra…"></label>
+        <button class="b p" id="indAdd">Registrar e reprogramar</button>
+      </div>
+      <div id="indLista" style="margin-top:10px"></div>
+    </div>
+  </section>
+
+  <section id="v-avulsas">
+    <div class="card"><h2>Coletas avulsas (conforme necessidade ou extras)</h2>
+      <div class="row">
+        <label class="f">Cliente<input id="avCli" list="dlClientes" placeholder="digite para buscar" style="min-width:280px"></label>
+        <label class="f">A partir de<input type="date" id="avDe"></label>
+        <label class="f">Até (prazo)<input type="date" id="avAte"></label>
+        <label class="f">kg (opcional)<input type="number" id="avKg" style="width:90px"></label>
+        <button class="b p" id="avAdd">Adicionar e reotimizar</button>
+      </div>
+      <div id="avLista" style="margin-top:10px"></div>
+    </div>
+  </section>
+
+  <section id="v-historico">
+    <div class="card"><h2>Rotas reais × otimização</h2>
+      <p class="small muted">Rotas reais reconstruídas do relatório de coletas (ordem pelo horário de cada coleta), saindo e voltando à garagem.
+      Para cada dia, compara a distância na ordem real com a mesma lista de clientes, no mesmo veículo, em ordem otimizada.
+      Distâncias pelo mesmo método do plano (estimativa ou ruas).</p>
+      <div class="row"><button class="b p" id="histCalc">Calcular comparação</button><span class="small muted" id="histProg"></span></div>
+      <div id="histRes" style="margin-top:12px"></div>
+    </div>
+  </section>
+
+  <section id="v-importar">
+    <div class="subtabs"><button data-v="config">Parâmetros e dados</button><button data-v="importar">Importar meuResíduo</button></div>
+    <div class="card"><h2>1. Relatórios exportados do meuResíduo (.xlsx)</h2>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px">
+        <label class="f">Relatório de Clientes (obrigatório)<input type="file" id="impCli" accept=".xlsx,.xls"></label>
+        <label class="f">Relatório de Contratos (frequências e pacotes)<input type="file" id="impCon" accept=".xlsx,.xls"></label>
+        <label class="f">Relatório de Coletas Realizadas (pesos, últimas coletas, rotas reais)<input type="file" id="impCol" accept=".xlsx,.xls"></label>
+        <label class="f">Relatório de Rotas (quem está sendo atendido)<input type="file" id="impRot" accept=".xlsx,.xls"></label>
+      </div>
+      <p class="small muted">Frequências: Semanal → semanal; Bissemanal → quinzenal; Mensal a cada 1/2/3/6 meses → mensal/bimestral/trimestral/semestral;
+      0 ou sem contrato → conforme necessidade. O dia da semana do contrato é ignorado. Peso por coleta = média das coletas com resíduo (ou pacote do contrato).
+      Clientes com contrato periódico que não aparecem nas rotas nem nas coletas são importados como <b>inativos</b> (podem ser reativados na aba Clientes).
+      Ao reimportar, coordenadas, tolerâncias e ativações feitas manualmente são preservadas.</p>
+      <div class="row"><button class="b p" id="impBtn">Importar</button></div>
+      <div id="impRes" style="margin-top:10px"></div>
+    </div>
+    <div class="card"><h2>2. Localização dos clientes</h2>
+      <div id="geoInfo"></div>
+      <div class="row" style="margin-top:8px">
+        <label class="b">Carregar coordenadas (.json)<input type="file" id="geoArq" accept=".json" style="display:none"></label>
+        <button class="b p" id="geoBtn">Geocodificar pendentes (OpenStreetMap)</button>
+        <button class="b" id="geoParar" style="display:none">Parar</button>
+        <button class="b" id="geoExp">Exportar coordenadas (.json)</button>
+      </div>
+      <div class="bar" id="geoBar" style="display:none"><div></div></div><div class="small muted" id="geoProg"></div>
+      <p class="small muted">São enviados ao Nominatim (OpenStreetMap) apenas rua, número, bairro, CEP e cidade, um endereço por segundo.
+      Precisão "número" é a melhor; "rua", "CEP" e "bairro" são aproximadas; "cidade" precisa ser marcada no mapa (Clientes → editar).</p>
+    </div>
+  </section>
+
+  <section id="v-config">
+    <div class="subtabs"><button data-v="config">Parâmetros e dados</button><button data-v="importar">Importar meuResíduo</button></div>
+    <div class="grid g2">
+      <div class="card"><h2>Parâmetros</h2><div id="cfgParams"></div>
+        <div class="row" style="margin-top:10px"><button class="b p" id="cfgSalvar">Salvar parâmetros</button></div></div>
+      <div class="card"><h2>Feriados</h2>
+        <p class="small muted">Feriados sem cidade (nacionais) e os da cidade-base param a frota. Feriados de outra cidade só bloqueiam coletas nos clientes daquela cidade.</p>
+        <div class="row"><label class="f">Data<input type="date" id="ferData"></label><label class="f">Nome<input id="ferNome"></label>
+          <label class="f">Cidade (vazio = nacional)<input id="ferCid"></label><button class="b" id="ferAdd">Adicionar</button></div>
+        <div class="tbl" style="max-height:300px;margin-top:8px"><table id="ferTab"></table></div></div>
+      <div class="card"><h2>Distâncias</h2><div id="distInfo"></div>
+        <div class="row" style="margin-top:8px"><button class="b" id="distCalc">Calcular distâncias pelas ruas (OSRM)</button><button class="b" id="distLimpar">Voltar à estimativa</button></div>
+        <div class="bar" id="distBar" style="display:none"><div></div></div><div class="small muted" id="distProg"></div></div>
+      <div class="card"><h2>Sincronização (Supabase, plano gratuito)</h2><div id="syncCfg"></div></div>
+      <div class="card"><h2>Backup e dados</h2>
+        <div class="row"><button class="b" id="bkExport">Exportar arquivo (.json)</button>
+          <label class="b">Importar arquivo<input type="file" id="bkImport" accept=".json" style="display:none"></label>
+          <button class="b" id="bkReset">Gerar novos dados fictícios</button></div></div>
+    </div>
+  </section>
+</main>
+</div>
+
+<datalist id="dlClientes"></datalist>
+
+<div id="modal"><div class="box">
+  <h2 style="margin:0 0 4px;font-size:16px" id="mdTit">Otimizando…</h2>
+  <div class="small muted" id="mdSub"></div>
+  <div class="bar"><div id="mdBar"></div></div>
+  <div class="small" id="mdInfo"></div>
+  <div class="row" style="margin-top:12px;justify-content:flex-end"><button class="b" id="mdParar">Parar e usar a melhor solução</button></div>
+</div></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="js/solver.js"></script>
+<script src="js/modelo.js"></script>
+<script src="js/sync.js"></script>
+<script src="js/importar.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

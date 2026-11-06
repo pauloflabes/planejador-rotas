@@ -1,0 +1,6 @@
+dados-privados/
+*.xlsx
+coordenadas-*.json
+rotas-backup-*.json
+.claude/
+__pycache__/
