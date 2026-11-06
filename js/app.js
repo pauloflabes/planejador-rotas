@@ -909,7 +909,9 @@
   function abrirLogin() {
     $('lgEmail').value = Sync.cfg.email || ''; $('lgSenha').value = '';
     $('lgUrl').value = Sync.cfg.url || ''; $('lgKey').value = Sync.cfg.anonKey || '';
-    $('lgSrv').open = !Sync.cfg.url || !Sync.cfg.anonKey;
+    // servidor já configurado (embutido): a seção fica oculta; só aparece se faltar algo ou a chave falhar
+    const srvOk = !!(Sync.cfg.url && Sync.cfg.anonKey);
+    $('lgSrv').style.display = srvOk ? 'none' : ''; $('lgSrv').open = !srvOk;
     $('lgMsg').textContent = ''; $('lgMsg').className = 'small';
     $('loginModal').classList.add('on');
     setTimeout(() => ($('lgEmail').value ? $('lgSenha') : $('lgEmail')).focus(), 50);
@@ -938,6 +940,7 @@
       if (r === 'vazio') irPara('importar');
     } catch (err) {
       $('lgMsg').className = 'small bad'; $('lgMsg').textContent = 'Não foi possível entrar: ' + traduzErro(err.message);
+      if (/api key|conex/i.test(traduzErro(err.message))) { $('lgSrv').style.display = ''; $('lgSrv').open = true; }
     } finally { $('lgEntrar').disabled = false; renderCabecalho(); }
   };
 
