@@ -20,7 +20,7 @@
   // ------------------------------------------------------------------ Supabase
   // Servidor padrão da equipe. A chave pública (publishable/anon) pode ficar no código: quem protege os dados
   // é o login + a regra de acesso (RLS) — com novos cadastros DESATIVADOS no Supabase.
-  const PADRAO = { url: 'https://yhdcklshhjvwjorduuvb.supabase.co', anonKey: '' };
+  const PADRAO = { url: 'https://yhdcklshhjvwjorduuvb.supabase.co', anonKey: 'sb_publishable_eAlSXL6EKUfapG8Y82sWtw_ZoagKRBD' };
   const Sync = {
     cfg: Object.assign({ url: '', anonKey: '', email: '', chave: 'principal', auto: true, sessao: null, remotoEm: null }, lerJSON(K_SYNC) || {}),
     gravarCfg() { gravarJSON(K_SYNC, this.cfg); },
