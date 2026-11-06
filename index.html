@@ -91,9 +91,11 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 .stops li .nm { flex: 1; }
 .banner { padding: 8px 12px; border-radius: 8px; background: var(--chip); margin-bottom: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .banner.warn { border-left: 4px solid var(--warn); }
-#modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: center; justify-content: center; z-index: 2000; padding: 16px; }
-#modal.on { display: flex; }
-#modal .box { background: var(--panel); border-radius: 12px; padding: 18px; width: min(460px, 100%); border: 1px solid var(--line); }
+#modal, #loginModal { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: center; justify-content: center; z-index: 2000; padding: 16px; }
+#modal.on, #loginModal.on { display: flex; }
+#loginModal { z-index: 2500; }
+#loginModal input { width: 100%; }
+#modal .box, #loginModal .box { background: var(--panel); border-radius: 12px; padding: 18px; width: min(460px, 100%); border: 1px solid var(--line); }
 .bar { height: 8px; background: var(--chip); border-radius: 99px; overflow: hidden; margin: 10px 0; }
 .bar > div { height: 100%; background: var(--accent); width: 0; transition: width .2s; }
 .num-icon { background: var(--panel); border: 2px solid; border-radius: 50%; font-size: 10px; font-weight: 700; text-align: center; line-height: 16px; width: 20px !important; height: 20px !important; color: var(--text); }
@@ -314,6 +316,27 @@ svg text { fill: var(--muted); font-size: 11px; }
 </div>
 
 <datalist id="dlClientes"></datalist>
+
+<div id="loginModal" role="dialog" aria-modal="true" aria-labelledby="lgTit"><div class="box">
+  <div class="row" style="align-items:center;gap:12px;margin-bottom:12px;flex-wrap:nowrap">
+    <img src="img/logo.jpg" alt="" style="height:48px;width:48px;border-radius:6px;background:#fff;object-fit:contain">
+    <div><h2 id="lgTit" style="margin:0;font-size:17px">Planejamento de Rotas</h2><div class="small muted">Entre para carregar os dados da equipe</div></div>
+  </div>
+  <form id="lgForm">
+    <label class="f">E-mail<input id="lgEmail" type="email" autocomplete="username" required></label>
+    <label class="f" style="margin-top:8px">Senha<input id="lgSenha" type="password" autocomplete="current-password" required></label>
+    <details id="lgSrv" style="margin-top:8px"><summary class="small muted">Servidor</summary>
+      <label class="f" style="margin-top:6px">URL do Supabase<input id="lgUrl"></label>
+      <label class="f" style="margin-top:6px">Chave pública (publishable ou anon)<input id="lgKey"></label>
+    </details>
+    <div id="lgMsg" class="small" style="margin-top:8px" aria-live="polite"></div>
+    <div class="row" style="margin-top:14px;justify-content:space-between">
+      <button type="button" class="b" id="lgPular">Continuar sem login</button>
+      <button type="submit" class="b p" id="lgEntrar">Entrar</button>
+    </div>
+  </form>
+  <p class="small muted" style="margin:12px 0 0">Sem login, os dados ficam só neste navegador. Esqueceu a senha? Peça ao administrador para redefini-la no Supabase.</p>
+</div></div>
 
 <div id="modal"><div class="box">
   <h2 style="margin:0 0 4px;font-size:16px" id="mdTit">Otimizando…</h2>

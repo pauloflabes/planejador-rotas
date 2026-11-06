@@ -18,6 +18,9 @@
   };
 
   // ------------------------------------------------------------------ Supabase
+  // Servidor padrão da equipe. A chave pública (publishable/anon) pode ficar no código: quem protege os dados
+  // é o login + a regra de acesso (RLS) — com novos cadastros DESATIVADOS no Supabase.
+  const PADRAO = { url: 'https://yhdcklshhjvwjorduuvb.supabase.co', anonKey: '' };
   const Sync = {
     cfg: Object.assign({ url: '', anonKey: '', email: '', chave: 'principal', auto: true, sessao: null, remotoEm: null }, lerJSON(K_SYNC) || {}),
     gravarCfg() { gravarJSON(K_SYNC, this.cfg); },
@@ -30,7 +33,7 @@
         body: JSON.stringify({ email, password: senha }),
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error_description || j.msg || `falha no login (${r.status})`);
+      if (!r.ok) throw new Error(j.error_description || j.msg || j.message || (r.status === 401 ? 'Invalid API key' : `falha no login (${r.status})`));
       this.cfg.email = email;
       this.cfg.sessao = { access_token: j.access_token, refresh_token: j.refresh_token, expira: Date.now() + (j.expires_in || 3600) * 1000 };
       this.gravarCfg();
@@ -81,6 +84,9 @@
       this.cfg.remotoEm = agora; this.gravarCfg();
     },
   };
+
+  if (!Sync.cfg.url) Sync.cfg.url = PADRAO.url;
+  if (!Sync.cfg.anonKey) Sync.cfg.anonKey = PADRAO.anonKey;
 
   const SQL_SUPABASE = `-- Execute no SQL Editor do Supabase (uma vez)
 create table if not exists public.estado (

@@ -160,9 +160,11 @@
     const b = $('bannerArea');
     let h = '';
     if (viaDisco) h += `<div class="banner warn">O programa foi aberto direto do arquivo. Para a busca de endereços e as distâncias pelas ruas funcionarem, abra pelo <b>iniciar.bat</b> (ou pelo endereço publicado).</div>`;
-    if (!st.clientes.some(c => c.ativo)) h += `<div class="banner"><div><b>Bem-vindo ao Planejamento de Rotas.</b> Ainda não há clientes cadastrados.
-      Importe os relatórios do meuResíduo ou cadastre os clientes um a um. ${Sync.ativo() ? '' : 'Se a equipe já usa a sincronização, entre com seu login em Configurações → Sincronização.'}</div>
-      <button class="b p" data-acao="importar">Importar do meuResíduo</button><button class="b" data-acao="novo">Cadastrar cliente</button></div>`;
+    if (!st.clientes.some(c => c.ativo)) h += Sync.ativo()
+      ? `<div class="banner"><div><b>Conectado como ${esc(Sync.cfg.email)}.</b> Ainda não há dados na nuvem: importe os relatórios do meuResíduo para começar. Os dados serão compartilhados com a equipe.</div>
+        <button class="b p" data-acao="importar">Importar do meuResíduo</button></div>`
+      : `<div class="banner"><div><b>Bem-vindo ao Planejamento de Rotas.</b> Entre com seu login para carregar os dados da equipe, ou importe os relatórios do meuResíduo para usar só neste navegador.</div>
+        <button class="b p" data-acao="login">Entrar</button><button class="b" data-acao="importar">Importar do meuResíduo</button></div>`;
     else if (!st.plano) h += `<div class="banner warn">Ainda não há plano de rotas. <button class="b p" data-acao="zero">Otimizar agora</button></div>`;
     else if (st.planoDesatualizado) h += `<div class="banner warn">Houve alterações desde a última otimização. <button class="b p" data-acao="quente">Reotimizar</button></div>`;
     if (conflitoSync) h += `<div class="banner warn">A nuvem tem uma versão mais nova (salva em ${new Date(conflitoSync).toLocaleString('pt-BR')}).
@@ -171,7 +173,8 @@
     b.querySelectorAll('button').forEach(x => x.onclick = () => {
       const a = x.dataset.acao;
       if (a === 'zero') otimizar('zero', 'Primeiro plano');
-      else if (a === 'importar' || a === 'novo') irPara(a);
+      else if (a === 'importar') irPara(a);
+      else if (a === 'login') abrirLogin();
       else if (a === 'quente') otimizar('quente', 'Alterações de cadastro');
       else if (a === 'baixar') baixarNuvem(true);
       else if (a === 'forcar') enviarNuvem(true);
@@ -884,17 +887,59 @@
   }
   // Baixa da nuvem. Se "perguntar" e houver dados locais diferentes, confirma antes de substituir.
   async function baixarNuvem(substituirSempre) {
-    if (!Sync.ativo()) return;
+    if (!Sync.ativo()) return 'sem-login';
+    let res;
     try {
       const dados = await Sync.baixar();
       syncErro = null; conflitoSync = null;
-      if (!dados) { await Sync.enviar(st, true); }
-      else if (substituirSempre || (dados.atualizadoEm > st.atualizadoEm && confirm('A nuvem tem uma versão mais recente dos dados. Carregar?'))) {
-        st = dados; idxCli(); A.Local.salvar(st); edicao = null;
-      }
-    } catch (e) { syncErro = 'erro'; console.warn(e); }
+      const vazioLocal = !st.clientes.length;
+      if (!dados) {
+        // nuvem vazia: envia o que houver aqui (nunca um estado em branco)
+        if (!vazioLocal) { await Sync.enviar(st, true); res = 'enviou'; } else res = 'vazio';
+      } else if (substituirSempre || vazioLocal || (dados.atualizadoEm > st.atualizadoEm && confirm('A nuvem tem uma versão mais recente dos dados. Carregar?'))) {
+        st = dados; idxCli(); A.Local.salvar(st); edicao = null; res = 'baixou';
+      } else res = 'mantido';
+    } catch (e) { syncErro = 'erro'; console.warn(e); res = 'erro'; }
     renderTudo();
+    return res;
   }
+
+  // ------------------------------------------------------------------ janela de login (primeira entrada)
+  const semLoginNestaSessao = () => { try { return sessionStorage.getItem('rotas.semLogin') === '1'; } catch (e) { return false; } };
+  function abrirLogin() {
+    $('lgEmail').value = Sync.cfg.email || ''; $('lgSenha').value = '';
+    $('lgUrl').value = Sync.cfg.url || ''; $('lgKey').value = Sync.cfg.anonKey || '';
+    $('lgSrv').open = !Sync.cfg.url || !Sync.cfg.anonKey;
+    $('lgMsg').textContent = ''; $('lgMsg').className = 'small';
+    $('loginModal').classList.add('on');
+    setTimeout(() => ($('lgEmail').value ? $('lgSenha') : $('lgEmail')).focus(), 50);
+  }
+  const fecharLogin = () => $('loginModal').classList.remove('on');
+  function traduzErro(m) {
+    if (/invalid login credentials/i.test(m)) return 'E-mail ou senha incorretos.';
+    if (/email not confirmed/i.test(m)) return 'E-mail ainda não confirmado no Supabase (Authentication → Users).';
+    if (/failed to fetch|networkerror|load failed/i.test(m)) return 'Sem conexão com o servidor. Verifique a internet e a URL do Supabase.';
+    if (/invalid api key|no api key/i.test(m)) return 'Chave pública do Supabase inválida (veja "Servidor").';
+    return m;
+  }
+  $('lgPular').onclick = () => { try { sessionStorage.setItem('rotas.semLogin', '1'); } catch (e) { /* ignora */ } fecharLogin(); };
+  $('lgForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const url = $('lgUrl').value.trim(), key = $('lgKey').value.trim();
+    if (!url || !key) { $('lgSrv').open = true; $('lgMsg').className = 'small bad'; $('lgMsg').textContent = 'Informe a URL e a chave pública do Supabase em "Servidor".'; return; }
+    Sync.cfg.url = url; Sync.cfg.anonKey = key; Sync.gravarCfg();
+    $('lgEntrar').disabled = true; $('lgMsg').className = 'small muted'; $('lgMsg').textContent = 'Entrando…';
+    try {
+      await Sync.entrar($('lgEmail').value.trim(), $('lgSenha').value);
+      $('lgMsg').textContent = 'Carregando os dados da equipe…';
+      const r = await baixarNuvem(false);
+      if (r === 'erro') throw new Error('login feito, mas não foi possível ler os dados. Confira se o código SQL foi executado no Supabase.');
+      fecharLogin();
+      if (r === 'vazio') irPara('importar');
+    } catch (err) {
+      $('lgMsg').className = 'small bad'; $('lgMsg').textContent = 'Não foi possível entrar: ' + traduzErro(err.message);
+    } finally { $('lgEntrar').disabled = false; renderCabecalho(); }
+  };
 
   // ------------------------------------------------------------------ IMPORTAÇÃO meuResíduo
   const K_GEO = 'rotas.geocache.v1';
@@ -1074,6 +1119,7 @@
   renderTudo();
   (async () => {
     if (Sync.ativo()) await baixarNuvem(false);
+    else if (!st.clientes.length && !semLoginNestaSessao()) abrirLogin();
   })();
   window.__app = { get st() { return st; }, otimizar };
 })();
