@@ -8,7 +8,7 @@
  *  dist, time      Float64Array n*n  (km, minutos) — podem ser assimétricas
  *  D, V            nº de dias úteis no horizonte, nº de veículos
  *  dayNum          Int32Array D      (nº do dia corrido de cada dia útil, para calcular intervalos)
- *  vehicles        [{capacity (kg), costPerKm (R$), maxMin (jornada em min)}]
+ *  vehicles        [{capacity (kg), costPerKm (R$), maxMin (jornada em min, inclui volta à garagem), baseMin (min fixos na garagem por rota)}]
  *  avail           Uint8Array D*V    (1 = veículo disponível no dia)
  *  tasks           [{loc, dem, svc, options:[[d,...],...], allowedV:[0|1..], prevOpt, changePen,
  *                    chainPrev, chainNext, gapMin, gapMax, targetOpt, init:{opt, v:[], ord:[]}|null}]
@@ -54,6 +54,8 @@ function SolverFactory() {
       let c = dd * veh.costPerKm;
       if (ll > veh.capacity) c += (ll - veh.capacity) * prm.Pcap;
       if (tt > veh.maxMin) c += (tt - veh.maxMin) * prm.Ptime;
+      // balanceamento: rota acima da jornada-alvo custa um pouco (incentiva dividir o trabalho entre os veículos)
+      if (veh.softMin && tt > veh.softMin) c += (Math.min(tt, veh.maxMin) - veh.softMin) * (prm.Pfolga || 0);
       return c;
     }
 
@@ -65,6 +67,7 @@ function SolverFactory() {
         dsum += dist[a * n + s.loc]; tsum += time[a * n + s.loc] + s.svc; load += s.dem; a = s.loc;
       }
       dsum += dist[a * n]; tsum += time[a * n];
+      if (st.length) tsum += vehicles[rt.v].baseMin || 0;   // carga/descarga na garagem
       rt.dist = dsum; rt.time = tsum; rt.load = load; rt.cost = rcost(rt.v, dsum, tsum, load);
     }
 
@@ -80,7 +83,7 @@ function SolverFactory() {
         for (let p = 0; p <= L; p++) {
           const b = p < L ? st[p].loc : 0;
           const dd = dist[a * n + x] + dist[x * n + b] - dist[a * n + b];
-          const dt = time[a * n + x] + time[x * n + b] - time[a * n + b] + svc;
+          const dt = time[a * n + x] + time[x * n + b] - time[a * n + b] + svc + (L === 0 ? (vehicles[v].baseMin || 0) : 0);
           const c = rcost(v, rt.dist + dd, rt.time + dt, rt.load + dem) - rt.cost;
           if (c < best) { best = c; bv = v; bp = p; }
           a = b;
@@ -294,7 +297,7 @@ function SolverFactory() {
             const T = tasks[s.t];
             const a = i > 0 ? rt1.stops[i - 1].loc : 0, b = i < rt1.stops.length - 1 ? rt1.stops[i + 1].loc : 0;
             const dd = dist[a * n + b] - dist[a * n + s.loc] - dist[s.loc * n + b];
-            const dt = time[a * n + b] - time[a * n + s.loc] - time[s.loc * n + b] - s.svc;
+            const dt = time[a * n + b] - time[a * n + s.loc] - time[s.loc * n + b] - s.svc - (rt1.stops.length === 1 ? (vehicles[v1].baseMin || 0) : 0);
             const gain = rt1.cost - rcost(v1, rt1.dist + dd, rt1.time + dt, rt1.load - s.dem);
             for (let v2 = 0; v2 < V; v2++) {
               if (v2 === v1 || !avail[d * V + v2] || !T.allowedV[v2]) continue;
@@ -303,7 +306,7 @@ function SolverFactory() {
               for (let p = 0; p <= st.length; p++) {
                 const bb = p < st.length ? st[p].loc : 0;
                 const ed = dist[aa * n + s.loc] + dist[s.loc * n + bb] - dist[aa * n + bb];
-                const et = time[aa * n + s.loc] + time[s.loc * n + bb] - time[aa * n + bb] + s.svc;
+                const et = time[aa * n + s.loc] + time[s.loc * n + bb] - time[aa * n + bb] + s.svc + (st.length === 0 ? (vehicles[v2].baseMin || 0) : 0);
                 const c = rcost(v2, rt2.dist + ed, rt2.time + et, rt2.load + s.dem) - rt2.cost;
                 if (c < gain - 1e-7) {
                   touchR(r1); touchR(d * V + v2); touchT(s.t);
@@ -452,7 +455,7 @@ function SolverFactory() {
     const initialCost = cur;
     const history = [[Math.round(now() - t0), best]];
 
-    const destroyOps = ['aleatoria', 'relacionada', 'rota', 'pior'];
+    const destroyOps = ['aleatoria', 'relacionada', 'rota', 'pior', 'cadeia', 'penalizadas'];
     const repairOps = ['gulosa', 'arrependimento'];
     const wD = destroyOps.map(() => 1), wR = repairOps.map(() => 1);
     const sD = destroyOps.map(() => 0), sR = repairOps.map(() => 0);
@@ -467,10 +470,67 @@ function SolverFactory() {
     const T0 = Math.max(1, 0.03 * cur / Math.log(2)), Tend = T0 / 2000;
     const limit = prm.timeLimitMs || 10000, maxIter = prm.maxIter || 1e9;
     let iter = 0, lastProg = now(), stopped = false;
+    let ultMelhoraIter = 0, ultMelhoraT = now(), reinicios = 0;
+    // perturbação forte a partir da melhor solução: retira cadeias inteiras de ~15% dos clientes e reconstrói
+    function reiniciar() {
+      S.restore(bestSnap); cur = best;
+      const alvo = Math.ceil(movable.length * 0.15), removed = new Set();
+      while (removed.size < alvo) { for (const t of cadeia(movable[(rand() * movable.length) | 0])) if (S.opt[t] >= 0) removed.add(t); }
+      const arr = [...removed]; for (const t of arr) S.removeTask(t);
+      repair(rand() < 0.5 ? 0 : 1, arr.concat(semAlocacao().filter(t => !removed.has(t))));
+      for (const r of new Set([...S.undoRoutes().keys()])) S.improveRoute(r);
+      S.commit(); cur = S.totalCost();
+      if (cur < best - 1e-6) { best = cur; bestSnap = S.snapshot(); history.push([Math.round(now() - t0), best]); }
+      reinicios++; ultMelhoraIter = iter; ultMelhoraT = now();
+    }
+
+    // cadeia de visitas do mesmo cliente (periodicidade): do primeiro ao último elemento
+    function cadeia(t) {
+      let h = t; while (tasks[h].chainPrev >= 0) h = tasks[h].chainPrev;
+      const out = []; for (let x = h; x >= 0; x = tasks[x].chainNext) out.push(x);
+      return out;
+    }
+    function penalizada(t) {
+      const T = tasks[t];
+      if (S.opt[t] < 0) return true;
+      if (T.optPen && T.optPen[S.opt[t]] > 0) return true;
+      if (S.lost[t] > 0) return true;
+      if (T.chainPrev >= 0 && S.opt[T.chainPrev] >= 0) {
+        const g = P.dayNum[S.dayOf(t)] - P.dayNum[S.dayOf(T.chainPrev)];
+        if (g < T.gapMin || g > T.gapMax) return true;
+      }
+      return false;
+    }
+    function semAlocacao() { const a = []; for (const t of movable) if (S.opt[t] < 0) a.push(t); return a.length > 12 ? a.sort(() => rand() - 0.5).slice(0, 12) : a; }
+    function listaPenalizadas() { const a = []; for (const t of movable) if (penalizada(t)) a.push(t); return a; }
+    // acrescenta tarefas vizinhas (no mapa) que estão nos mesmos dias, para abrir espaço
+    function vizinhasNosDias(t, dias, removed, limite) {
+      const sl = tasks[t].loc;
+      for (const loc of NB.nbr[sl]) {
+        if (removed.size >= limite) return;
+        for (const u of NB.locTasks[loc]) {
+          if (removed.size >= limite) return;
+          if (S.opt[u] < 0 || !tasks[u].options.length) continue;
+          if (dias.has(S.dayOf(u)) && rand() < 0.6) removed.add(u);
+        }
+      }
+    }
 
     function destroy(op, q) {
       const removed = new Set();
-      if (op === 0) {
+      if (op === 4 || op === 5) {
+        const pen = listaPenalizadas();
+        const sementes = [];
+        if (op === 5 && pen.length) { for (let k = 0; k < Math.max(1, q / 6) && pen.length; k++) sementes.push(pen.splice((rand() * pen.length) | 0, 1)[0]); }
+        else if (op === 4) sementes.push(pen.length && rand() < 0.7 ? pen[(rand() * pen.length) | 0] : movable[(rand() * movable.length) | 0]);
+        else sementes.push(movable[(rand() * movable.length) | 0]);
+        for (const sd of sementes) {
+          const ch = op === 4 ? cadeia(sd) : [tasks[sd].chainPrev, sd, tasks[sd].chainNext].filter(x => x >= 0);
+          const dias = new Set();
+          for (const t of ch) { if (S.opt[t] >= 0) { removed.add(t); for (const d of tasks[t].options[S.opt[t]]) dias.add(d); } for (const o of tasks[t].options) for (const d of o) if (o.length === 1) dias.add(d); }
+          vizinhasNosDias(sd, dias, removed, removed.size + Math.max(3, q / sementes.length));
+        }
+      } else if (op === 0) {
         for (let k = 0; k < q * 3 && removed.size < q; k++) { const t = movable[(rand() * movable.length) | 0]; if (S.opt[t] >= 0) removed.add(t); }
       } else if (op === 1) {
         const al = assignedList(); if (!al.length) return [];
@@ -545,12 +605,85 @@ function SolverFactory() {
       }
     }
 
+    // "Dividir rota": passa um setor (metade das paradas, por ângulo em relação à garagem) de uma rota longa
+    // para um veículo livre no mesmo dia. Inserir visita a visita nunca chega aqui, porque a primeira
+    // visita no veículo parado paga sozinha a ida e volta à garagem.
+    function splitMove() {
+      if (!P.coords || P.V < 2) return false;
+      const cands = [];
+      for (const rt of S.routes) {
+        const veh = P.vehicles[rt.v];
+        if (rt.stops.length < 6 || rt.time <= (veh.softMin || veh.maxMin) * 0.85) continue;
+        for (let v2 = 0; v2 < P.V; v2++) {
+          if (v2 === rt.v || !P.avail[rt.d * P.V + v2]) continue;
+          const r2 = S.routes[rt.d * P.V + v2];
+          if (r2.stops.length === 0) cands.push([rt, r2]);
+        }
+      }
+      if (!cands.length) return false;
+      const [r1, r2] = cands[(rand() * cands.length) | 0];
+      const dep = P.depot, ang = (s) => Math.atan2(P.coords[s.loc][0] - dep[0], P.coords[s.loc][1] - dep[1]);
+      const ord = r1.stops.filter(s => tasks[s.t].allowedV[r2.v]).sort((a, b) => ang(a) - ang(b));
+      if (ord.length < 3) return false;
+      const k = Math.max(1, Math.round(ord.length * (0.35 + 0.3 * rand())));
+      const ini = (rand() * ord.length) | 0;
+      const mover = new Set();
+      for (let i = 0; i < k; i++) mover.add(ord[(ini + i) % ord.length]);
+      const i1 = r1.d * P.V + r1.v, i2 = r2.d * P.V + r2.v;
+      S.touchR(i1); S.touchR(i2);
+      const fica = [];
+      for (const s of r1.stops) {
+        if (!mover.has(s)) { fica.push(s); continue; }
+        S.touchT(s.t);
+        const nvo = { t: s.t, loc: s.loc, dem: s.dem, svc: s.svc, r: i2 };
+        S.vis[s.t] = S.vis[s.t].map(x => (x === s ? nvo : x));
+        r2.stops.push(nvo);
+      }
+      r1.stops = fica;
+      S.evalRoute(r1); S.evalRoute(r2); S.dayVer[r1.d]++;
+      return true;
+    }
+
+    // "Mover grupo": muda para OUTRO dia, de uma vez, um grupo de paradas próximas entre si de uma rota
+    // (ex.: os clientes de Araxá da mesma viagem). Visita a visita isso nunca compensa, porque a primeira
+    // paga sozinha a viagem inteira.
+    function moverGrupo() {
+      const rts = S.routes.filter(rt => rt.stops.length >= 2);
+      if (!rts.length) return false;
+      const r1 = rts[(rand() * rts.length) | 0];
+      const seedStop = r1.stops[(rand() * r1.stops.length) | 0];
+      const T0s = tasks[seedStop.t];
+      if (T0s.options[0].length !== 1 || T0s.options.length < 2) return false;
+      const outros = T0s.options.map(o => o[0]).filter(d => d !== r1.d);
+      if (!outros.length) return false;
+      const d2 = outros[(rand() * outros.length) | 0];
+      const raio = 3 + rand() * 20; // km
+      const grupo = [];
+      for (const s of r1.stops) {
+        const T = tasks[s.t];
+        if (T.options[0].length !== 1) continue;
+        if (P.dist[seedStop.loc * P.n + s.loc] > raio) continue;
+        const o = T.options.findIndex(op => op[0] === d2);
+        if (o >= 0) grupo.push([s.t, o]);
+      }
+      if (grupo.length < 2) return false;
+      for (const [t] of grupo) S.removeTask(t);
+      for (const [t, o] of grupo) S.insertTask(t, o);
+      return true;
+    }
+
     function step() {
       iter++;
       const q = qMin + ((rand() * (qMax - qMin + 1)) | 0);
-      const dOp = pick(wD), rOp = pick(wR);
-      const removed = destroy(dOp, q);
-      repair(rOp, removed);
+      let dOp = -1, rOp = -1;
+      const u = rand();
+      if (!((u < 0.08 && splitMove()) || (u >= 0.08 && u < 0.2 && moverGrupo()))) {
+        dOp = pick(wD); rOp = pick(wR);
+        const removed = destroy(dOp, q);
+        // visitas sem alocação nunca eram reconsideradas: entram em toda reconstrução
+        for (const t of semAlocacao()) if (!removed.includes(t)) removed.push(t);
+        repair(rOp, removed);
+      }
       const touched = new Set([...S.undoRoutes().keys()]);
       const days = new Set();
       for (const r of touched) days.add(S.routes[r].d);
@@ -562,11 +695,13 @@ function SolverFactory() {
       let score = 0;
       if (nc < best - 1e-6) {
         best = nc; cur = nc; S.commit(); bestSnap = S.snapshot(); score = 33;
-        history.push([Math.round(el), best]);
+        history.push([Math.round(el), best]); ultMelhoraIter = iter; ultMelhoraT = now();
       } else if (nc < cur - 1e-6) { cur = nc; S.commit(); score = 9; }
       else if (rand() < Math.exp(-(nc - cur) / Tm)) { cur = nc; S.commit(); score = 13; }
       else S.revert();
-      sD[dOp] += score; sR[rOp] += score; cD[dOp]++; cR[rOp]++;
+      if (dOp >= 0) { sD[dOp] += score; sR[rOp] += score; cD[dOp]++; cR[rOp]++; }
+      // estagnou (sem melhorar o melhor por um bom tempo): recomeça perturbando a melhor solução
+      if (iter - ultMelhoraIter > 1500 && now() - ultMelhoraT > Math.max(5000, 0.06 * limit) && limit - (now() - t0) > 5000) reiniciar();
       if (iter % 100 === 0) {
         for (let i = 0; i < wD.length; i++) { if (cD[i]) wD[i] = Math.max(0.1, 0.8 * wD[i] + 0.2 * sD[i] / cD[i]); sD[i] = 0; cD[i] = 0; }
         for (let i = 0; i < wR.length; i++) { if (cR[i]) wR[i] = Math.max(0.1, 0.8 * wR[i] + 0.2 * sR[i] / cR[i]); sR[i] = 0; cR[i] = 0; }
@@ -576,7 +711,7 @@ function SolverFactory() {
     function finish() {
       S.restore(bestSnap);
       const res = report(S);
-      res.stats = { iter, ms: Math.round(now() - t0), initMs: Math.round(tInit), initialCost, history, stopped };
+      res.stats = { iter, ms: Math.round(now() - t0), initMs: Math.round(tInit), initialCost, history, stopped, reinicios };
       return res;
     }
 
@@ -596,6 +731,13 @@ function SolverFactory() {
         return iter >= maxIter || now() - t0 >= limit;
       },
       stop() { stopped = true; },
+      melhor() { return { cost: best, snap: bestSnap }; },
+      // adota uma solução melhor vinda de outra rodada (mesmo problema) e continua dela
+      adotar(snap, custo) {
+        if (!(custo < best - 1e-6)) return false;
+        S.restore(snap); cur = custo; best = custo; bestSnap = snap; ultMelhoraIter = iter; ultMelhoraT = now();
+        history.push([Math.round(now() - t0), best]); return true;
+      },
       finish,
     };
   }
@@ -608,6 +750,7 @@ function SolverFactory() {
       fuel: rt.dist * P.vehicles[rt.v].costPerKm,
       overMin: Math.max(0, rt.time - P.vehicles[rt.v].maxMin),
       overKg: Math.max(0, rt.load - P.vehicles[rt.v].capacity),
+      acimaAlvo: P.vehicles[rt.v].softMin ? Math.max(0, Math.min(rt.time, P.vehicles[rt.v].maxMin) - P.vehicles[rt.v].softMin) : 0,
     }));
     let km = 0, fuel = 0, overMin = 0, overKg = 0;
     for (const r of routes) { km += r.km; fuel += r.fuel; overMin += r.overMin; overKg += r.overKg; }
@@ -720,7 +863,7 @@ function SolverFactory() {
 // Bootstrap do Web Worker (quando carregado como worker via Blob)
 function SolverWorkerMain(self) {
   const S = SolverFactory();
-  let stopFlag = false;
+  let stopFlag = false, runAtual = null;
   function revive(P) {
     P.dist = new Float64Array(P.dist); P.time = new Float64Array(P.time);
     P.avail = new Uint8Array(P.avail); P.dayNum = new Int32Array(P.dayNum);
@@ -730,14 +873,21 @@ function SolverWorkerMain(self) {
     const m = e.data;
     try {
       if (m.type === 'stop') { stopFlag = true; return; }
+      // cooperação entre rodadas paralelas: informar a melhor solução / adotar a melhor de outra rodada
+      if (m.type === 'melhor') { if (runAtual) { const b = runAtual.melhor(); self.postMessage({ type: 'melhor', cost: b.cost, snap: b.snap }); } return; }
+      if (m.type === 'adotar') { if (runAtual) runAtual.adotar(m.snap, m.cost); return; }
       if (m.type === 'solve') {
         stopFlag = false;
         const P = revive(m.problem);
         const base = S.baseline(P);
-        const res = await S.solveAsync(P, {
-          progress: (p) => self.postMessage({ type: 'progress', id: m.id, ...p }),
-          shouldStop: () => stopFlag,
-        });
+        const run = runAtual = S.solveSync(P, { progress: (p) => self.postMessage({ type: 'progress', id: m.id, ...p }) });
+        for (;;) {
+          if (run.runSlice(60)) break;
+          if (stopFlag) { run.stop(); break; }
+          await new Promise(r => setTimeout(r, 0));
+        }
+        const res = run.finish();
+        runAtual = null;
         res.baseline = base;
         self.postMessage({ type: 'done', id: m.id, result: res });
       } else if (m.type === 'evaluate') {

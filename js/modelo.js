@@ -60,12 +60,48 @@
     const s = Math.sin(dLat / 2) ** 2 + Math.cos(a[0] * toR) * Math.cos(b[0] * toR) * Math.sin(dLng / 2) ** 2;
     return 2 * R * Math.asin(Math.sqrt(s));
   }
-  // Estimativa por linha reta × fator de desvio; tempo por velocidade média conforme a distância.
-  function estimativa(a, b, fator) {
-    const km = haversine(a, b) * (fator || 1.35);
-    const vel = km < 2 ? 22 : km < 8 ? 30 : km < 20 ? 45 : 65;
-    return [km, km / vel * 60];
+  // Tempo de deslocamento (min) a partir da distância: os primeiros 10 km na velocidade urbana,
+  // o restante na velocidade de rodovia (parâmetros configuráveis).
+  function tempoDesloc(km, p) {
+    const vu = (p && p.velUrbana) || 35, vr = (p && p.velRodovia) || 70;
+    return (Math.min(km, 10) / vu + Math.max(0, km - 10) / vr) * 60;
   }
+  // Estimativa por linha reta × fator de desvio.
+  function estimativa(a, b, p) {
+    const km = haversine(a, b) * ((p && p.fatorDesvio) || 1.35);
+    return [km, tempoDesloc(km, p)];
+  }
+  const precoComb = (v, p) => (v.combustivel === 'diesel' ? p.precoDiesel : p.precoGasolina);
+  const servicoDe = (c, p) => (c.servico !== null && c.servico !== undefined && c.servico !== '' ? Number(c.servico) : p.tempoParada);
+
+  // Atualiza estados salvos por versões anteriores (parâmetros novos, combustível, jornada)
+  function migrar(st) {
+    const p = st.params, d = PARAMS_PADRAO;
+    if (p.precoDiesel === undefined) p.precoDiesel = p.diesel !== undefined ? p.diesel : d.precoDiesel;
+    delete p.diesel;
+    for (const k of Object.keys(d)) if (p[k] === undefined) p[k] = d[k];
+    if (!st.migr2) {
+      if (p.Ptime <= 2) p.Ptime = d.Ptime;          // jornada passa a ser praticamente rígida
+      st.veiculos.forEach(v => { delete v.jornada; });
+      st.clientes.forEach(c => { if (c.origem === 'meuResíduo' && c.servico === 8) c.servico = null; });
+      st.migr2 = true;
+    }
+    if (!st.migr3) {  // otimizador mais robusto: até 5 min do zero e 1 min na reotimização diária
+      if (p.tempoCompleto < 300) p.tempoCompleto = 300;
+      if (p.tempoDiario < 60) p.tempoDiario = 60;
+      st.migr3 = true;
+    }
+    st.veiculos.forEach(v => { if (!v.combustivel) v.combustivel = 'gasolina'; });
+    return st;
+  }
+
+  // Parâmetros de cálculo (valores padrão). Tempo de parada e velocidade calibrados com as coletas de set–out/2026
+  // (≈5,7 min por parada e ≈39 km/h entre paradas; ≈1h20 até Araxá), arredondados para o lado conservador.
+  const PARAMS_PADRAO = {
+    precoGasolina: 6.39, precoDiesel: 6.29, jornadaH: 7, jornadaAlvoH: 6, Pfolga: 0.5, tempoParada: 6, velUrbana: 35, velRodovia: 85, tempoGaragem: 0,
+    aviso: 5, penMudancaProx: 8, penMudancaLonge: 1.5, Pcap: 50, Ptime: 50, Pun: 400, Pgap: 4, Patraso: 150, atrasoMax: 5,
+    tempoDiario: 60, tempoCompleto: 300, fatorDesvio: 1.35, seed: 7,
+  };
 
   const GARAGEM = { nome: 'Garagem', endereco: 'Av. Hiroschi Aramaki, 230 — Residencial 2000, Uberaba/MG', lat: -19.77139, lng: -47.88806 };
 
@@ -77,14 +113,13 @@
       atualizadoEm: new Date().toISOString(),
       garagem: Object.assign({}, GARAGEM),
       params: {
-        hoje, cidadeBase: 'Uberaba', horizonte: 60, sabado: false, diesel: 6.29,
-        aviso: 5, penMudancaProx: 8, penMudancaLonge: 1.5, Pcap: 50, Ptime: 2, Pun: 400, Pgap: 4, Patraso: 150, atrasoMax: 5,
-        tempoDiario: 20, tempoCompleto: 60, fatorDesvio: 1.35, seed: 7,
+        hoje, cidadeBase: 'Uberaba', horizonte: 60, sabado: false, ...PARAMS_PADRAO,
       },
+      migr2: true, migr3: true,
       // valores provisórios: ajuste capacidade e consumo em "Frota e eventos"
       veiculos: [
-        { id: 'v1_CPN3G98', nome: 'CPN3G98', placa: 'CPN3G98', capacidade: 1500, consumo: 8, jornada: 480, tipos: ['saude', 'industrial'] },
-        { id: 'v2_RUV0C87', nome: 'RUV0C87', placa: 'RUV0C87', capacidade: 1500, consumo: 8, jornada: 480, tipos: ['saude', 'industrial'] },
+        { id: 'v1_CPN3G98', nome: 'CPN3G98', placa: 'CPN3G98', capacidade: 1500, consumo: 8, combustivel: 'gasolina', tipos: ['saude', 'industrial'] },
+        { id: 'v2_RUV0C87', nome: 'RUV0C87', placa: 'RUV0C87', capacidade: 1500, consumo: 8, combustivel: 'gasolina', tipos: ['saude', 'industrial'] },
       ],
       clientes: [],
       feriados: feriadosPadrao([ano, ano + 1]),
@@ -144,16 +179,16 @@
         if (a !== undefined && b !== undefined && matriz.coords[a][0] === coords[i][0] && matriz.coords[a][1] === coords[i][1]
           && matriz.coords[b][0] === coords[j][0] && matriz.coords[b][1] === coords[j][1]) {
           const k = a * matriz.ids.length + b;
-          const dv = matriz.dist[k], tv = matriz.time[k];
-          if (dv >= 0 && tv >= 0) { dist[i * n + j] = dv; time[i * n + j] = tv; ok = true; }
+          const dv = matriz.dist[k];
+          if (dv >= 0) { dist[i * n + j] = dv; time[i * n + j] = tempoDesloc(dv, p); ok = true; }
         }
       }
-      if (!ok) { const e = estimativa(coords[i], coords[j], p.fatorDesvio); dist[i * n + j] = e[0]; time[i * n + j] = e[1]; faltantes++; }
+      if (!ok) { const e = estimativa(coords[i], coords[j], p); dist[i * n + j] = e[0]; time[i * n + j] = e[1]; faltantes++; }
     }
     if (mIdx) fonte = faltantes === 0 ? 'ruas' : 'misto';
 
     const V = st.veiculos.length;
-    const vehicles = st.veiculos.map(v => ({ capacity: v.capacidade, costPerKm: p.diesel / v.consumo, maxMin: v.jornada }));
+    const vehicles = st.veiculos.map(v => ({ capacity: v.capacidade, costPerKm: precoComb(v, p) / v.consumo, maxMin: p.jornadaH * 60, softMin: Math.min(p.jornadaAlvoH || p.jornadaH, p.jornadaH) * 60, baseMin: Number(p.tempoGaragem) || 0 }));
     const avail = new Uint8Array(D * V);
     for (let d = 0; d < D; d++) for (let v = 0; v < V; v++) {
       const vid = st.veiculos[v].id;
@@ -194,7 +229,7 @@
         const ds = dias.map((s, i) => [s, i]).filter(([s]) => okDia(s)).map(x => x[1]);
         if (!ds.length) continue;
         const init = prev.length ? { opt: 0, v: ds.map(d => { const x = prev.find(y => y.d === d); return x ? x.v : -1; }), ord: ds.map(d => { const x = prev.find(y => y.d === d); return x ? x.ord : 0; }) } : null;
-        tasks.push({ loc, dem: c.kg, svc: c.servico, options: [ds], allowedV, prevOpt: -1, changePen: 0, chainPrev: -1, chainNext: -1, gapMin: 0, gapMax: 1e9, targetOpt: 0, init });
+        tasks.push({ loc, dem: c.kg, svc: servicoDe(c, p), options: [ds], allowedV, prevOpt: -1, changePen: 0, chainPrev: -1, chainNext: -1, gapMin: 0, gapMax: 1e9, targetOpt: 0, init });
         meta.push({ clienteId: c.id, tipo: 'diario' });
         continue;
       }
@@ -235,7 +270,7 @@
             };
           }
         }
-        tasks.push({ loc, dem: c.kg, svc: c.servico, options: optsNE, allowedV, prevOpt, changePen: p.penMudancaProx * 3,
+        tasks.push({ loc, dem: c.kg, svc: servicoDe(c, p), options: optsNE, allowedV, prevOpt, changePen: p.penMudancaProx * 3,
           chainPrev: -1, chainNext: -1, gapMin: 0, gapMax: 1e9, targetOpt: 0, init });
         meta.push({ clienteId: c.id, tipo: '2x' });
         continue;
@@ -286,7 +321,7 @@
         }
         if (bp) { usadosPrev.add(bp); prevOpt = ds.indexOf(bp.d); init = { opt: prevOpt, v: [bp.v], ord: [bp.ord] }; }
         const ti = tasks.length;
-        tasks.push({ loc, dem: c.kg, svc: c.servico, options: ds.map(d => [d]), allowedV, prevOpt,
+        tasks.push({ loc, dem: c.kg, svc: servicoDe(c, p), options: ds.map(d => [d]), allowedV, prevOpt,
           changePen: prevOpt >= 0 ? mudPen(ds[prevOpt]) : 0, chainPrev: prevTask, chainNext: -1,
           gapMin: I - tol, gapMax: I + tol, targetOpt, init, optPen: extra ? optPen : null });
         if (prevTask >= 0) tasks[prevTask].chainNext = ti;
@@ -305,7 +340,7 @@
       if (!ds.length) ds.push(0);
       const prev = (prevIdx.get(c.id) || []).find(x => ds.includes(x.d));
       const prevOpt = prev ? ds.indexOf(prev.d) : -1;
-      tasks.push({ loc: locOf.get(c.id), dem: Number(av.kg || c.kg), svc: c.servico, options: ds.map(d => [d]), allowedV: st.veiculos.map(v => (v.tipos || []).includes(c.tipo) ? 1 : 0),
+      tasks.push({ loc: locOf.get(c.id), dem: Number(av.kg || c.kg), svc: servicoDe(c, p), options: ds.map(d => [d]), allowedV: st.veiculos.map(v => (v.tipos || []).includes(c.tipo) ? 1 : 0),
         prevOpt, changePen: prevOpt >= 0 ? mudPen(ds[prevOpt]) : 0, chainPrev: -1, chainNext: -1, gapMin: 0, gapMax: 1e9, targetOpt: 0,
         init: prev ? { opt: prevOpt, v: [prev.v], ord: [prev.ord] } : null });
       meta.push({ clienteId: c.id, tipo: 'avulsa', avulsaId: av.id });
@@ -313,7 +348,7 @@
 
     const P = {
       n, dist, time, D, V, vehicles, avail, tasks, dayNum, coords, depot: coords[0],
-      params: { Pcap: p.Pcap, Ptime: p.Ptime, Pun: p.Pun, Pgap: p.Pgap, timeLimitMs: 1000 * p.tempoDiario, seed: p.seed },
+      params: { Pcap: p.Pcap, Ptime: p.Ptime, Pfolga: p.Pfolga, Pun: p.Pun, Pgap: p.Pgap, timeLimitMs: 1000 * p.tempoDiario, seed: p.seed },
     };
     return { P, dias, ids, meta, fonte, faltantes, clientes, locOf };
   }
@@ -332,7 +367,8 @@
       geradoEm: new Date().toISOString(), primeiroDia: dias[0], ultimoDia: dias[dias.length - 1], dias: planoDias, naoAlocadas,
       resumo: {
         km: res.km, combustivel: res.fuel, litros: res.routes.reduce((s, r) => s + r.km / st.veiculos[r.v].consumo, 0),
-        extraMin: res.overMin, extraKg: res.overKg, mudancas: res.changed.length, intervalosFora: res.gapIssues.length, atrasadas: (res.late || []).length,
+        extraMin: res.overMin, extraKg: res.overKg,
+        rotasAcimaAlvo: res.routes.filter(r => r.acimaAlvo > 1).length, rotasUsadas: res.routes.filter(r => r.tasks.length).length, mudancas: res.changed.length, intervalosFora: res.gapIssues.length, atrasadas: (res.late || []).length,
         perdidas: res.lostVisits, visitas: res.routes.reduce((s, r) => s + r.tasks.length, 0), custo: res.cost,
         referencia: res.baseline || null, fonteDistancias: prob.fonte, nDias: dias.length,
       },
@@ -354,14 +390,14 @@
       if (i === j) continue;
       if (mIdx) {
         const a = mIdx.get(ids[i]), b = mIdx.get(ids[j]);
-        if (a !== undefined && b !== undefined) { const k = a * matriz.ids.length + b; if (matriz.dist[k] >= 0) { dist[i * n + j] = matriz.dist[k]; time[i * n + j] = matriz.time[k]; continue; } }
+        if (a !== undefined && b !== undefined) { const k = a * matriz.ids.length + b; if (matriz.dist[k] >= 0) { dist[i * n + j] = matriz.dist[k]; time[i * n + j] = tempoDesloc(matriz.dist[k], st.params); continue; } }
       }
-      const e = estimativa(coords[i], coords[j], st.params.fatorDesvio); dist[i * n + j] = e[0]; time[i * n + j] = e[1];
+      const e = estimativa(coords[i], coords[j], st.params); dist[i * n + j] = e[0]; time[i * n + j] = e[1];
     }
     return { n, dist, time, coords };
   }
 
-  const api = { temCoord, matrizIds, dnum, dstr, wday, fmtCurto, fmtData, DIAS_SEM, FREQ, PADROES_2X, feriadosPadrao, haversine, estimativa, estadoInicial, calendario, montarProblema, aplicarResultado, ultimoConfirmado, GARAGEM };
+  const api = { PARAMS_PADRAO, migrar, tempoDesloc, precoComb, servicoDe, temCoord, matrizIds, dnum, dstr, wday, fmtCurto, fmtData, DIAS_SEM, FREQ, PADROES_2X, feriadosPadrao, haversine, estimativa, estadoInicial, calendario, montarProblema, aplicarResultado, ultimoConfirmado, GARAGEM };
   root.Modelo = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

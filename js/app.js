@@ -23,6 +23,7 @@
   let st = A.Local.carregar();
   // começa em branco (e descarta dados fictícios de versões antigas do protótipo)
   if (!st || st.versao !== 1 || (st.clientes.length && st.clientes.every(c => c.ficticio))) st = M.estadoInicial(hojeReal());
+  M.migrar(st);
   let matriz = A.Local.carregarMatriz();
   let mapCli = new Map();
   const idxCli = () => { mapCli = new Map(st.clientes.map(c => [c.id, c])); };
@@ -56,6 +57,55 @@
     };
     return worker;
   }
+  // Rodadas paralelas cooperativas: várias rodadas com sementes diferentes, uma por núcleo do processador;
+  // periodicamente todas adotam a melhor solução encontrada até ali. Fica com o melhor resultado.
+  let srcWorker = null;
+  const pool = [];
+  function novoWorker() {
+    if (!srcWorker) srcWorker = URL.createObjectURL(new Blob([SolverFactory.toString() + '\n' + SolverWorkerMain.toString() + '\nSolverWorkerMain(self);'], { type: 'text/javascript' }));
+    return new Worker(srcWorker);
+  }
+  function nParalelas() { return Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1)); }
+  function otimizarParalelo(P, seg, onProgress) {
+    const k = nParalelas();
+    while (pool.length < k) pool.push(novoWorker());
+    const ws = pool.slice(0, k);
+    const prog = new Array(k).fill(null);
+    return new Promise((resolve, reject) => {
+      const res = new Array(k);
+      let faltam = k, coletados = [], trocas = 0;
+      const distribuir = () => {
+        if (!coletados.length) return;
+        const b = coletados.reduce((a, x) => (x.cost < a.cost ? x : a));
+        ws.forEach((w, j) => { if (j !== b.i && res[j] === undefined) w.postMessage({ type: 'adotar', snap: b.snap, cost: b.cost }); });
+        coletados = []; trocas++;
+      };
+      const timer = setInterval(() => {
+        coletados = [];
+        ws.forEach((w, j) => { if (res[j] === undefined) w.postMessage({ type: 'melhor' }); });
+        setTimeout(distribuir, 1500);
+      }, Math.max(20000, seg * 1000 / 5));
+      ws.forEach((w, i) => {
+        w.onmessage = (e) => {
+          const m = e.data;
+          if (m.type === 'progress') { prog[i] = m; onProgress(prog, k); }
+          else if (m.type === 'melhor') coletados.push({ i, cost: m.cost, snap: m.snap });
+          else if (m.type === 'done') {
+            res[i] = m.result;
+            if (--faltam === 0) {
+              clearInterval(timer);
+              const melhor = res.reduce((a, r) => (r.cost < a.cost ? r : a));
+              melhor.stats.paralelas = k; melhor.stats.trocas = trocas;
+              melhor.stats.custosRodadas = res.map(r => Math.round(r.cost * 100) / 100);
+              resolve(melhor);
+            }
+          } else if (m.type === 'error') { clearInterval(timer); reject(new Error(m.message)); }
+        };
+        const Pi = Object.assign({}, P, { params: Object.assign({}, P.params, { seed: (P.params.seed || 7) + i * 101 }) });
+        w.postMessage({ type: 'solve', id: 1, problem: Pi });
+      });
+    });
+  }
   function chamar(type, payload, onProgress) {
     const id = ++reqId;
     return new Promise((resolve, reject) => {
@@ -81,9 +131,12 @@
     $('mdBar').style.width = '0%'; $('mdInfo').textContent = 'Montando solução inicial…';
     $('modal').classList.add('on');
     try {
-      const res = await chamar('solve', { problem: prob.P }, (p) => {
-        $('mdBar').style.width = Math.min(100, 100 * p.ms / p.limit).toFixed(0) + '%';
-        $('mdInfo').textContent = `${(p.ms / 1000).toFixed(1)} s de ${seg} s · ${fmtN(p.iter)} iterações · melhor custo ${fmtR(p.best)}`;
+      const res = await otimizarParalelo(prob.P, seg, (prog, k) => {
+        const ps = prog.filter(Boolean);
+        if (!ps.length) return;
+        const ms = Math.max(...ps.map(p => p.ms)), it = ps.reduce((s, p) => s + p.iter, 0), best = Math.min(...ps.map(p => p.best));
+        $('mdBar').style.width = Math.min(100, 100 * ms / ps[0].limit).toFixed(0) + '%';
+        $('mdInfo').textContent = `${(ms / 1000).toFixed(0)} s de ${seg} s · ${k} rodada(s) em paralelo · ${fmtN(it)} iterações · melhor custo ${fmtR(best)}`;
       });
       res.stats.montagemMs = Math.round(tMont);
       M.aplicarResultado(st, prob, res);
@@ -98,7 +151,7 @@
       renderTudo();
     }
   }
-  $('mdParar').onclick = () => { if (worker) worker.postMessage({ type: 'stop' }); };
+  $('mdParar').onclick = () => { pool.forEach(w => w.postMessage({ type: 'stop' })); if (worker) worker.postMessage({ type: 'stop' }); };
 
   // ------------------------------------------------------------------ consultas ao plano
   function rotasDoDia(dia) {
@@ -195,11 +248,11 @@
     if (!st.plano) { k.innerHTML = '<div class="muted">Sem plano.</div>'; $('comparacao').innerHTML = ''; $('convergencia').innerHTML = ''; $('alertas').innerHTML = ''; $('ultimaOtim').textContent = ''; return; }
     const r = st.plano.resumo, s = st.plano.stats;
     const tiles = [
-      ['Combustível previsto', fmtR(r.combustivel), `${fmtN(r.litros)} litros de diesel`],
+      ['Combustível previsto', fmtR(r.combustivel), `${fmtN(r.litros)} litros de combustível`],
       ['Distância total', fmtN(r.km) + ' km', `${fmtN(r.km / Math.max(1, r.nDias), 1)} km por dia útil`],
       ['Visitas programadas', fmtN(r.visitas), `${r.nDias} dias úteis`],
       ['Custo por visita', fmtR(r.combustivel / Math.max(1, r.visitas)), 'só combustível'],
-      ['Tempo de otimização', (s.ms / 1000).toFixed(1) + ' s', `${fmtN(s.iter)} iterações · montagem ${s.montagemMs || 0} ms`],
+      ['Tempo de otimização', (s.ms / 1000).toFixed(1) + ' s', `${s.paralelas ? s.paralelas + ' rodadas em paralelo · ' : ''}${fmtN(s.iter)} iterações (melhor rodada)`],
     ];
     k.innerHTML = tiles.map(t => `<div class="kpi"><div class="l">${t[0]}</div><div class="v">${t[1]}</div><div class="small muted">${t[2]}</div></div>`).join('');
     $('ultimaOtim').textContent = `Último plano: ${new Date(st.plano.geradoEm).toLocaleString('pt-BR')} (${st.plano.modo === 'zero' ? 'do zero' : 'a partir do plano anterior'}${st.plano.motivo ? ' — ' + st.plano.motivo : ''}). Distâncias: ${({ estimativa: 'estimadas (linha reta × fator)', ruas: 'pelas ruas (OSRM)', misto: 'pelas ruas, com alguns pontos estimados' })[r.fonteDistancias]}.`;
@@ -226,6 +279,7 @@
     const al = [];
     if (st.plano.naoAlocadas.length) al.push(`<div class="bad"><b>${st.plano.naoAlocadas.length} visita(s) não couberam no horizonte</b> (falta de veículo ou de jornada):</div><ul>${st.plano.naoAlocadas.slice(0, 30).map(x => `<li>${esc(nomeCli(x.clienteId))} — janela ${M.fmtCurto(x.janela[0])} a ${M.fmtCurto(x.janela[1])}</li>`).join('')}</ul>`);
     if (r.atrasadas) al.push(`<div class="warn">${r.atrasadas} visita(s) programadas depois da janela de tolerância (atraso controlado).</div>`);
+    if (r.rotasAcimaAlvo) al.push(`<div class="muted">${r.rotasAcimaAlvo} de ${r.rotasUsadas} rota(s) passam da jornada-alvo de ${fmtN(st.params.jornadaAlvoH, 1)} h (limite: ${fmtN(st.params.jornadaH, 1)} h), em geral quando o outro veículo está em viagem longa.</div>`);
     if (r.extraMin > 0.5) al.push(`<div class="warn">Rotas que passam da jornada: total de ${fmtH(r.extraMin)} além do limite.</div>`);
     if (r.extraKg > 0.5) al.push(`<div class="bad">Excesso de carga: ${fmtN(r.extraKg)} kg acima da capacidade somando todas as rotas.</div>`);
     if (r.intervalosFora) al.push(`<div class="muted">${r.intervalosFora} par(es) de coletas consecutivas com intervalo fora da tolerância.</div>`);
@@ -349,10 +403,10 @@
 
     let h = '';
     rotas.forEach((r, vi) => {
-      const v = st.veiculos[veicIdx(r.veiculoId)] || { nome: r.veiculoId, capacidade: 0, jornada: 0 };
+      const v = st.veiculos[veicIdx(r.veiculoId)] || { nome: r.veiculoId, capacidade: 0 };
       const kg = r.clientes.reduce((s, c) => s + (mapCli.get(c)?.kg || 0), 0);
       h += `<h3><span class="dot" style="background:${corV(r.veiculoId)}"></span> ${esc(v.nome)}</h3>
-        <div class="small muted">${r.clientes.length} paradas · ${fmtN(r.km, 1)} km · ${fmtH(r.min)} de ${fmtH(v.jornada)} · ${fmtN(kg)} de ${fmtN(v.capacidade)} kg · combustível ${fmtR(r.combustivel)}
+        <div class="small muted">${r.clientes.length} paradas · ${fmtN(r.km, 1)} km · ${fmtH(r.min)} de ${fmtH(st.params.jornadaH * 60)} (com a volta à garagem) · ${fmtN(kg)} de ${fmtN(v.capacidade)} kg · combustível ${fmtR(r.combustivel)}
         ${editavel && edicao.alterado ? ' · <span class="warn">totais serão recalculados ao confirmar</span>' : ''}
         ${r.extraMin > 1 ? ` · <span class="warn">${fmtH(r.extraMin)} além da jornada</span>` : ''}</div>
         <ol class="stops">${r.clientes.map((cid, i) => {
@@ -424,9 +478,9 @@
       const vi = veicIdx(r.veiculoId), v = st.veiculos[vi];
       const cs = r.clientes.filter(c => prob.locOf.has(c));
       let seq = { order: [], km: 0, min: 0, load: 0 };
-      if (cs.length) seq = await chamar('sequence', { problem: Pmin, locs: cs.map(c => prob.locOf.get(c)), dems: cs.map(c => mapCli.get(c).kg), svcs: cs.map(c => mapCli.get(c).servico), v: vi });
+      if (cs.length) seq = await chamar('sequence', { problem: Pmin, locs: cs.map(c => prob.locOf.get(c)), dems: cs.map(c => mapCli.get(c).kg), svcs: cs.map(c => M.servicoDe(mapCli.get(c), st.params)), v: vi });
       rotas.push({ veiculoId: r.veiculoId, clientes: seq.order.map(t => cs[t]), km: seq.km, min: seq.min, kg: seq.load,
-        combustivel: seq.km * st.params.diesel / v.consumo, extraMin: Math.max(0, seq.min - v.jornada), extraKg: Math.max(0, seq.load - v.capacidade) });
+        combustivel: seq.km * M.precoComb(v, st.params) / v.consumo, extraMin: Math.max(0, seq.min - st.params.jornadaH * 60), extraKg: Math.max(0, seq.load - v.capacidade) });
     }
     registrarConfirmacao(dia, rotas, false);
     edicao = null;
@@ -568,7 +622,7 @@
       <label class="f">Frequência<select id="ceFreq">${Object.entries(M.FREQ).map(([k, f]) => `<option value="${k}" ${k === c.freq ? 'selected' : ''}>${f.nome}</option>`).join('')}</select></label>
       <label class="f">Tolerância ± dias<input id="ceTol" type="number" min="0" value="${c.tol === null || c.tol === undefined ? '' : c.tol}" placeholder="padrão ${M.FREQ[c.freq]?.tol}" style="width:90px"></label>
       <label class="f">kg/coleta<input id="ceKg" type="number" value="${c.kg}" style="width:90px"></label>
-      <label class="f">Atendimento (min)<input id="ceSvc" type="number" value="${c.servico}" style="width:90px"></label>
+      <label class="f">Tempo de parada (min)<input id="ceSvc" type="number" step="any" value="${c.servico === null || c.servico === undefined ? '' : c.servico}" placeholder="padrão ${st.params.tempoParada}" style="width:110px"></label>
       <label class="f">Última coleta<input id="ceUlt" type="date" value="${c.ultimaColeta || ''}"></label>
       <label class="f">Latitude<input id="ceLat" value="${c.lat}" style="width:110px"></label>
       <label class="f">Longitude<input id="ceLng" value="${c.lng}" style="width:110px"></label>
@@ -590,7 +644,7 @@
     $('ceFechar').onclick = () => { mp.remove(); box.style.display = 'none'; };
     $('ceSalvar').onclick = () => {
       c.nome = $('ceNome').value; c.cidade = $('ceCid').value; c.tipo = $('ceTipo').value; c.freq = $('ceFreq').value;
-      c.tol = $('ceTol').value === '' ? null : Number($('ceTol').value); c.kg = Number($('ceKg').value); c.servico = Number($('ceSvc').value);
+      c.tol = $('ceTol').value === '' ? null : Number($('ceTol').value); c.kg = Number($('ceKg').value); c.servico = $('ceSvc').value === '' ? null : Number($('ceSvc').value);
       c.ultimaColeta = $('ceUlt').value || null;
       const la = parseFloat($('ceLat').value), ln = parseFloat($('ceLng').value);
       if (isFinite(la) && isFinite(ln) && (movido || la !== c.lat || ln !== c.lng)) { c.lat = la; c.lng = ln; c.geoPrecisao = 'manual'; }
@@ -632,7 +686,7 @@
     const c = {
       id: novoId(), nome: $('nvNome').value.trim() || 'Novo cliente', endereco: $('nvEnd').value.trim(), cidade: $('nvCidade').value.trim() || st.params.cidadeBase,
       tipo: $('nvTipo').value, freq: $('nvFreq').value, tol: $('nvTol').value === '' ? null : Number($('nvTol').value),
-      kg: Number($('nvKg').value) || 0, servico: Number($('nvSvc').value) || 8, lat: Number($('nvLat').value), lng: Number($('nvLng').value),
+      kg: Number($('nvKg').value) || 0, servico: $('nvSvc').value === '' ? null : Number($('nvSvc').value), lat: Number($('nvLat').value), lng: Number($('nvLng').value),
       ultimaColeta: null, inicio: null, ativo: true,
     };
     if (!isFinite(c.lat) || !isFinite(c.lng) || !c.lat || !c.lng) return null;
@@ -684,7 +738,7 @@
     const cands = candidatos(c, prob);
     $('nvRes').innerHTML = '<span class="muted">Calculando…</span>';
     const t0 = performance.now();
-    const res = await chamar('evaluate', { problem: prob.P, candidates: cands.map(k => ({ loc, dem: c.kg, svc: c.servico, allowedV, days: k.days })) });
+    const res = await chamar('evaluate', { problem: prob.P, candidates: cands.map(k => ({ loc, dem: c.kg, svc: M.servicoDe(c, st.params), allowedV, days: k.days })) });
     const ms = performance.now() - t0;
     const lst = cands.map((k, i) => Object.assign({}, k, res[i])).filter(x => x.ok);
     lst.sort((a, b) => a.cost / a.days.length - b.cost / b.days.length);
@@ -717,16 +771,16 @@
 
   // ------------------------------------------------------------------ FROTA
   function renderFrota() {
-    $('frotaTab').innerHTML = `<table><tr><th>Nome</th><th>Placa</th><th class="n">Capacidade (kg)</th><th class="n">Consumo (km/L)</th><th class="n">Jornada (min)</th><th>Resíduos</th><th></th></tr>
+    $('frotaTab').innerHTML = `<table><tr><th>Nome</th><th>Placa</th><th class="n">Capacidade (kg)</th><th class="n">Consumo (km/L)</th><th>Combustível</th><th>Resíduos</th><th></th></tr>
       ${st.veiculos.map((v, i) => `<tr>
         <td><input data-vf="${i}:nome" value="${esc(v.nome)}"></td><td><input data-vf="${i}:placa" value="${esc(v.placa)}" style="width:100px"></td>
         <td class="n"><input data-vf="${i}:capacidade" type="number" value="${v.capacidade}" style="width:90px"></td>
         <td class="n"><input data-vf="${i}:consumo" type="number" step="0.1" value="${v.consumo}" style="width:80px"></td>
-        <td class="n"><input data-vf="${i}:jornada" type="number" value="${v.jornada}" style="width:80px"></td>
+        <td><select data-vf="${i}:combustivel"><option value="gasolina" ${v.combustivel !== 'diesel' ? 'selected' : ''}>gasolina</option><option value="diesel" ${v.combustivel === 'diesel' ? 'selected' : ''}>diesel</option></select></td>
         <td><label><input type="checkbox" data-vt="${i}:saude" ${v.tipos.includes('saude') ? 'checked' : ''}> saúde</label>
             <label><input type="checkbox" data-vt="${i}:industrial" ${v.tipos.includes('industrial') ? 'checked' : ''}> industrial</label></td>
         <td>${st.veiculos.length > 1 ? `<button class="x" data-vr="${i}" title="remover">✕</button>` : ''}</td></tr>`).join('')}</table>
-      <p class="small muted">O custo por km de cada veículo é o preço do diesel ÷ consumo. Com consumos diferentes, o otimizador prefere o veículo mais econômico enquanto houver capacidade e jornada.</p>`;
+      <p class="small muted">O custo por km de cada veículo é o preço do seu combustível (gasolina ou diesel, em Configurações) ÷ consumo. A jornada máxima diária também fica em Configurações. Com consumos diferentes, o otimizador prefere o veículo mais econômico enquanto houver capacidade e jornada.</p>`;
     $('frotaTab').querySelectorAll('[data-vf]').forEach(e => e.onchange = () => {
       const [i, k] = e.dataset.vf.split(':'); const v = st.veiculos[i];
       v[k] = e.type === 'number' ? Number(e.value) : e.value; marcarDesatualizado();
@@ -749,7 +803,7 @@
   $('addVeic').onclick = () => {
     const k = st.veiculos.length + 1;
     let id = 'v' + k; while (st.veiculos.some(v => v.id === id)) id += 'b';
-    st.veiculos.push({ id, nome: `Veículo ${k}`, placa: '', capacidade: 1000, consumo: 8, jornada: 480, tipos: ['saude', 'industrial'] });
+    st.veiculos.push({ id, nome: `Veículo ${k}`, placa: '', capacidade: 1000, consumo: 8, combustivel: 'gasolina', tipos: ['saude', 'industrial'] });
     st.plano = null; salvar(); renderTudo();
   };
   $('indAdd').onclick = async () => {
@@ -788,9 +842,15 @@
   // ------------------------------------------------------------------ CONFIGURAÇÕES
   const CAMPOS = [
     ['hoje', 'Data de hoje (simulação)', 'date'], ['cidadeBase', 'Cidade-base da frota', 'text'], ['horizonte', 'Horizonte de planejamento (dias corridos)', 'number'],
-    ['sabado', 'Trabalha aos sábados', 'checkbox'], ['diesel', 'Preço do diesel (R$/L)', 'number'], ['fatorDesvio', 'Fator de desvio da estimativa (linha reta → ruas)', 'number'],
+    ['sabado', 'Trabalha aos sábados', 'checkbox'], ['precoGasolina', 'Preço da gasolina (R$/L)', 'number'], ['precoDiesel', 'Preço do diesel (R$/L)', 'number'],
+    ['jornadaH', 'Jornada máxima por dia, incluindo a volta à garagem (h)', 'number'],
+    ['jornadaAlvoH', 'Jornada-alvo (h): acima dela o otimizador tenta dividir o trabalho entre os veículos', 'number'],
+    ['Pfolga', 'Custo por minuto acima da jornada-alvo (R$) — maior = mais equilíbrio entre veículos', 'number'], ['tempoGaragem', 'Tempo na garagem por rota, se contar na jornada (min)', 'number'],
+    ['tempoParada', 'Tempo médio por parada (min) — clientes podem ter valor próprio', 'number'],
+    ['velUrbana', 'Velocidade média entre paradas, até 10 km (km/h)', 'number'], ['velRodovia', 'Velocidade média em trechos longos, acima de 10 km (km/h)', 'number'],
+    ['fatorDesvio', 'Fator de desvio da estimativa sem matriz das ruas (linha reta → ruas)', 'number'],
     ['aviso', 'Dias úteis "congelados" para mudanças (aviso ao cliente)', 'number'], ['penMudancaProx', 'Penalidade por mudar a data dentro desse prazo (R$)', 'number'],
-    ['penMudancaLonge', 'Penalidade por mudar a data depois desse prazo (R$)', 'number'], ['Ptime', 'Custo por minuto além da jornada (R$)', 'number'],
+    ['penMudancaLonge', 'Penalidade por mudar a data depois desse prazo (R$)', 'number'], ['Ptime', 'Penalidade por minuto além da jornada (R$) — alta = jornada rígida', 'number'],
     ['Pcap', 'Penalidade por kg acima da capacidade (R$)', 'number'], ['Pgap', 'Penalidade por dia fora do intervalo entre coletas (R$)', 'number'],
     ['Patraso', 'Penalidade por dia útil de atraso além da tolerância (R$)', 'number'], ['atrasoMax', 'Atraso máximo permitido (dias úteis)', 'number'],
     ['Pun', 'Penalidade por visita não programada (R$)', 'number'], ['tempoDiario', 'Tempo da reotimização diária (s)', 'number'], ['tempoCompleto', 'Tempo da otimização do zero (s)', 'number'],
@@ -987,7 +1047,7 @@
       if (res.veiculosPlacas.length) {
         st.veiculos = res.veiculosPlacas.map((p, i) => {
           const ex = st.veiculos.find(v => v.placa === p);
-          return ex || { id: 'v' + (i + 1) + '_' + p, nome: p, placa: p, capacidade: 1500, consumo: 8, jornada: 480, tipos: ['saude', 'industrial'] };
+          return ex || { id: 'v' + (i + 1) + '_' + p, nome: p, placa: p, capacidade: 1500, consumo: 8, combustivel: 'gasolina', tipos: ['saude', 'industrial'] };
         });
       }
       st.plano = null; st.confirmados = {}; st.avulsas = []; st.indisponibilidades = []; st.params.hoje = hojeReal();

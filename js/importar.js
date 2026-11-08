@@ -143,7 +143,7 @@
         id, nome: (c['Nome Fantasia'] || c['Razão social'] || id).trim(), razao: (c['Razão social'] || '').trim(), cnpj: c.CNPJ || '',
         rua, numero, bairro: (c.Bairro || '').trim(), cep: (c.CEP || '').trim(), cidade: (c.Cidade || '').trim(), uf: c.Estado || 'MG',
         endereco: `${rua}${numero ? ', ' + numero : ''}${c.Bairro ? ' — ' + c.Bairro.trim() : ''} — ${c.Cidade || ''}`,
-        tipo, freq, tol: null, kg: Math.max(0.5, Math.round(kg * 10) / 10), servico: 8,
+        tipo, freq, tol: null, kg: Math.max(0.5, Math.round(kg * 10) / 10), servico: null,
         ultimaColeta: ult, inicio: null,
         ativo: freq === 'demanda' ? true : emRota, motivoInativo: (freq !== 'demanda' && !emRota) ? 'Sem rota nem coleta no período dos relatórios (inativado na importação)' : '',
         contrato: ct ? ct.texto : '(sem contrato ativo)', lat: null, lng: null, geoPrecisao: null, origem: 'meuResíduo',
@@ -152,7 +152,7 @@
       if (ant) {
         if (ant.lat && ant.geoPrecisao && chaveEndereco(ant) === chaveEndereco(novo)) { novo.lat = ant.lat; novo.lng = ant.lng; novo.geoPrecisao = ant.geoPrecisao; }
         if (ant.tol !== null && ant.tol !== undefined) novo.tol = ant.tol;
-        if (ant.servico) novo.servico = ant.servico;
+        if (ant.servico !== null && ant.servico !== undefined && ant.servico !== '') novo.servico = ant.servico;
         if (ant.ativoManual !== undefined) { novo.ativo = ant.ativoManual; novo.ativoManual = ant.ativoManual; novo.motivoInativo = ant.ativoManual ? '' : 'Inativado manualmente'; }
       }
       clientes.push(novo);
