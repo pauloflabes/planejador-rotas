@@ -29,7 +29,7 @@ Otimização de rotas periódicas (PVRP) que roda inteiramente no navegador. Nã
 1. Selecione os relatórios de Clientes (obrigatório), Contratos, Coletas Realizadas e Rotas, e clique em **Importar**.
 2. Localize os endereços: carregue `dados-privados/coordenadas-clientes.json` (já geocodificado) ou use **Geocodificar pendentes**. Corrija no mapa (Clientes → editar) os que ficaram com precisão "cidade" ou "bairro".
 3. Confira os clientes inativados (Clientes → filtro "inativos") e reative quem ainda for cliente.
-4. Ajuste capacidade e consumo dos veículos em **Frota e eventos** e otimize.
+4. Ajuste capacidade, consumo e combustível dos veículos em **Configurações → Veículos** e otimize.
 5. Aba **Histórico real**: compara as rotas de set–out com a ordem otimizada e com o plano.
 
 Para reimportar depois (relatórios novos), repita o passo 1: coordenadas, tolerâncias e ativações manuais são preservadas.

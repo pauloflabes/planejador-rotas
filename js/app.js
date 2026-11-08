@@ -183,7 +183,7 @@
 
   // ------------------------------------------------------------------ navegação
   let vista = 'painel';
-  const PAI = { novo: 'clientes', importar: 'config' }; // sub-abas
+  const PAI = { novo: 'clientes', importar: 'config', veiculos: 'config', feriados: 'config', sync: 'config' }; // sub-abas
   document.querySelectorAll('#nav button, .subtabs button').forEach(b => b.onclick = () => irPara(b.dataset.v));
   function irPara(v) {
     vista = v;
@@ -196,7 +196,7 @@
   function renderTudo() { renderCabecalho(); renderBanner(); renderVista(); }
   function renderVista() {
     ({ painel: renderPainel, calendario: renderCalendario, dia: renderDia, clientes: renderClientes, novo: renderNovo,
-      frota: renderFrota, avulsas: renderAvulsas, config: renderConfig, historico: renderHistorico, importar: renderImportar })[vista]();
+      frota: renderFrota, avulsas: renderAvulsas, config: renderConfig, historico: renderHistorico, importar: renderImportar, veiculos: renderVeiculos, feriados: renderFeriados, sync: renderSync })[vista]();
   }
 
   function renderCabecalho() {
@@ -770,7 +770,7 @@
   };
 
   // ------------------------------------------------------------------ FROTA
-  function renderFrota() {
+  function renderVeiculos() {
     $('frotaTab').innerHTML = `<table><tr><th>Nome</th><th>Placa</th><th class="n">Capacidade (kg)</th><th class="n">Consumo (km/L)</th><th>Combustível</th><th>Resíduos</th><th></th></tr>
       ${st.veiculos.map((v, i) => `<tr>
         <td><input data-vf="${i}:nome" value="${esc(v.nome)}"></td><td><input data-vf="${i}:placa" value="${esc(v.placa)}" style="width:100px"></td>
@@ -780,7 +780,7 @@
         <td><label><input type="checkbox" data-vt="${i}:saude" ${v.tipos.includes('saude') ? 'checked' : ''}> saúde</label>
             <label><input type="checkbox" data-vt="${i}:industrial" ${v.tipos.includes('industrial') ? 'checked' : ''}> industrial</label></td>
         <td>${st.veiculos.length > 1 ? `<button class="x" data-vr="${i}" title="remover">✕</button>` : ''}</td></tr>`).join('')}</table>
-      <p class="small muted">O custo por km de cada veículo é o preço do seu combustível (gasolina ou diesel, em Configurações) ÷ consumo. A jornada máxima diária também fica em Configurações. Com consumos diferentes, o otimizador prefere o veículo mais econômico enquanto houver capacidade e jornada.</p>`;
+      <p class="small muted">O custo por km de cada veículo é o preço do seu combustível ÷ consumo. Os preços da gasolina e do diesel e a jornada diária ficam na aba Parâmetros e dados. Com consumos diferentes, o otimizador prefere o veículo mais econômico enquanto houver capacidade e jornada.</p>`;
     $('frotaTab').querySelectorAll('[data-vf]').forEach(e => e.onchange = () => {
       const [i, k] = e.dataset.vf.split(':'); const v = st.veiculos[i];
       v[k] = e.type === 'number' ? Number(e.value) : e.value; marcarDesatualizado();
@@ -795,6 +795,8 @@
       st.indisponibilidades = st.indisponibilidades.filter(x => x.veiculoId !== v.id);
       st.plano = null; salvar(); renderTudo();
     });
+  }
+  function renderFrota() {
     $('indVeic').innerHTML = st.veiculos.map(v => `<option value="${v.id}">${esc(v.nome)}</option>`).join('');
     if (!$('indDe').value) { const pr = proximoRevisar() || st.params.hoje; $('indDe').value = pr; $('indAte').value = pr; }
     $('indLista').innerHTML = st.indisponibilidades.length ? `<table><tr><th>Veículo</th><th>De</th><th>Até</th><th>Motivo</th><th></th></tr>${st.indisponibilidades.map((x, i) => `<tr><td>${esc(st.veiculos[veicIdx(x.veiculoId)]?.nome || x.veiculoId)}</td><td>${M.fmtData(x.de)}</td><td>${M.fmtData(x.ate)}</td><td>${esc(x.motivo)}</td><td><button class="x" data-ir="${i}">✕</button></td></tr>`).join('')}</table>` : '<span class="muted">Nenhum registro.</span>';
@@ -861,10 +863,11 @@
       `<label class="f">${l}<input data-cf="${k}" type="${t}" ${t === 'checkbox' ? (p[k] ? 'checked' : '') : `value="${esc(p[k])}"`} ${t === 'number' ? 'step="any"' : ''}></label>`).join('')}</div>
       <p class="small muted">Tolerâncias padrão: semanal ±1, quinzenal ±2, mensal ±4, bimestral ±6 dias (ajustáveis por cliente). 2x/semana usa seg+qui ou ter+sex.
       Garagem: ${esc(st.garagem.endereco)} (${st.garagem.lat}, ${st.garagem.lng}).</p>`;
-    $('ferTab').innerHTML = `<tr><th>Data</th><th>Nome</th><th>Cidade</th><th></th></tr>` + st.feriados.map((f, i) => `<tr><td>${M.fmtCurto(f.data)}/${f.data.slice(0, 4)}</td><td>${esc(f.nome)}</td><td>${esc(f.cidade || 'nacional')}</td><td><button class="x" data-fr="${i}">✕</button></td></tr>`).join('');
-    $('ferTab').querySelectorAll('[data-fr]').forEach(b => b.onclick = () => { st.feriados.splice(Number(b.dataset.fr), 1); marcarDesatualizado(); renderConfig(); });
     renderDistInfo();
-    renderSync();
+  }
+  function renderFeriados() {
+    $('ferTab').innerHTML = `<tr><th>Data</th><th>Nome</th><th>Cidade</th><th></th></tr>` + st.feriados.map((f, i) => `<tr><td>${M.fmtCurto(f.data)}/${f.data.slice(0, 4)}</td><td>${esc(f.nome)}</td><td>${esc(f.cidade || 'nacional')}</td><td><button class="x" data-fr="${i}">✕</button></td></tr>`).join('');
+    $('ferTab').querySelectorAll('[data-fr]').forEach(b => b.onclick = () => { st.feriados.splice(Number(b.dataset.fr), 1); marcarDesatualizado(); renderFeriados(); });
   }
   $('cfgSalvar').onclick = () => {
     document.querySelectorAll('[data-cf]').forEach(e => { const k = e.dataset.cf; st.params[k] = e.type === 'checkbox' ? e.checked : e.type === 'number' ? Number(e.value) : e.value; });
@@ -873,7 +876,7 @@
   $('ferAdd').onclick = () => {
     if (!$('ferData').value) return;
     st.feriados.push({ data: $('ferData').value, nome: $('ferNome').value || 'Feriado', cidade: $('ferCid').value.trim() });
-    st.feriados.sort((a, b) => a.data.localeCompare(b.data)); marcarDesatualizado(); renderConfig();
+    st.feriados.sort((a, b) => a.data.localeCompare(b.data)); marcarDesatualizado(); renderFeriados();
   };
 
   function renderDistInfo() {
@@ -1054,7 +1057,7 @@
       const at = st.clientes.filter(c => c.ativo);
       const freqs = {}; at.forEach(c => { freqs[c.freq] = (freqs[c.freq] || 0) + 1; });
       st.importResumo = { em: new Date().toISOString(), total: st.clientes.length, ativos: at.length, inativados: st.clientes.length - at.length,
-        historico: res.historico.length, placas: res.veiculosPlacas, freqs, avisos: res.avisos.concat(['Capacidade e consumo dos veículos são valores provisórios: ajuste em "Frota e eventos".']) };
+        historico: res.historico.length, placas: res.veiculosPlacas, freqs, avisos: res.avisos.concat(['Capacidade e consumo dos veículos são valores provisórios: ajuste em Configurações → Veículos.']) };
       idxCli(); edicao = null; salvar();
       $('impRes').innerHTML = resumoImport(st.importResumo);
       renderCabecalho(); renderBanner(); renderImportar();
