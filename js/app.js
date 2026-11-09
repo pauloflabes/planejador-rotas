@@ -415,7 +415,8 @@
             <button class="x" data-rm="${vi}:${i}" title="retirar desta rota">✕</button>` : '';
           return `<li><span class="i">${i + 1}</span><span class="nm">${esc(c.nome || cid)}<div class="small muted">${esc(M.FREQ[c.freq]?.nome || '')} · ${c.kg || 0} kg · ${esc(c.cidade || '')}</div></span>${ctl}</li>`;
         }).join('')}</ol>
-        ${r.clientes.length ? linksMaps(r) : ''}`;
+        ${r.clientes.length ? linksMaps(r) : ''}
+        ${rd.conf && !rd.auto && r.clientes.length ? `<div class="row" style="margin:4px 0 10px"><button class="b" data-mr="${vi}">Enviar ao meuResíduo</button></div>` : ''}`;
     });
     if (editavel) {
       h += `<h3>Incluir coleta fora do cronograma</h3><div class="row">
@@ -452,6 +453,7 @@
       const dest = edicao.rotas.find(r => r.veiculoId === s.value);
       dest.clientes.push(cid); edicao.alterado = true; renderDia();
     });
+    root.querySelectorAll('[data-mr]').forEach(b => b.onclick = () => enviarMeuResiduo(diaAtual, rotasDoDia(diaAtual).rotas[Number(b.dataset.mr)]));
     if ($('dAdd')) $('dAdd').onclick = () => {
       const id = ($('dAddCli').value || '').split(' — ')[0].trim();
       if (!mapCli.has(id)) return alerta('Escolha um cliente da lista.');
@@ -462,6 +464,29 @@
     if ($('dDesf')) $('dDesf').onclick = () => { edicao = null; renderDia(); };
     if ($('dConf')) $('dConf').onclick = confirmarDia;
     if ($('dDesconf')) $('dDesconf').onclick = desfazerConfirmacao;
+  }
+
+  // A extensão abre o formulário do meuResíduo e o preenche; quem clica em Salvar é sempre o usuário.
+  function enviarMeuResiduo(dia, r) {
+    if (!document.documentElement.dataset.extMeuresiduo) return alerta('Instale a extensão "Planejamento de Rotas → meuResíduo" no Chrome ou Edge para enviar a rota (veja o LEIA-ME).');
+    const v = st.veiculos[veicIdx(r.veiculoId)];
+    if (!v || !v.placa) return alerta('Cadastre a placa do veículo em Configurações → Veículos.');
+    const validos = r.clientes.filter(c => /^\d+$/.test(c));
+    const semCodigo = r.clientes.filter(c => !/^\d+$/.test(c));
+    if (!validos.length) return alerta('Nenhum cliente desta rota tem código do meuResíduo.');
+    if (semCodigo.length && !confirm(`${semCodigo.length} cliente(s) sem código do meuResíduo ficarão fora do envio:\n${semCodigo.map(c => mapCli.get(c)?.nome || c).join('\n')}\n\nContinuar?`)) return;
+    const data = dia.split('-').reverse().join('/');
+    const id = Date.now();
+    const rota = { placa: v.placa, motorista: v.motorista || M.MOTORISTAS[v.placa] || '', data, descricao: M.descricaoRota(validos.map(c => mapCli.get(c)?.cidade), data),
+      clientes: validos.map(c => ({ id: c, nome: mapCli.get(c)?.nome || '' })) };
+    const aoResponder = (e) => {
+      const m = e.data;
+      if (e.source !== window || !m || m.origem !== 'extensao-meuresiduo' || m.id !== id) return;
+      window.removeEventListener('message', aoResponder);
+      if (!m.ok) alerta('Não foi possível enviar a rota: ' + (m.erro || 'erro desconhecido'));
+    };
+    window.addEventListener('message', aoResponder);
+    window.postMessage({ origem: 'planejador-rotas', tipo: 'enviar-rota', id, rota }, location.origin);
   }
 
   function problemaSequencia() {
@@ -771,9 +796,10 @@
 
   // ------------------------------------------------------------------ FROTA
   function renderVeiculos() {
-    $('frotaTab').innerHTML = `<table><tr><th>Nome</th><th>Placa</th><th class="n">Capacidade (kg)</th><th class="n">Consumo (km/L)</th><th>Combustível</th><th>Resíduos</th><th></th></tr>
+    $('frotaTab').innerHTML = `<table><tr><th>Nome</th><th>Placa</th><th>Motorista (como no meuResíduo)</th><th class="n">Capacidade (kg)</th><th class="n">Consumo (km/L)</th><th>Combustível</th><th>Resíduos</th><th></th></tr>
       ${st.veiculos.map((v, i) => `<tr>
         <td><input data-vf="${i}:nome" value="${esc(v.nome)}"></td><td><input data-vf="${i}:placa" value="${esc(v.placa)}" style="width:100px"></td>
+        <td><input data-vf="${i}:motorista" value="${esc(v.motorista || '')}" style="min-width:230px"></td>
         <td class="n"><input data-vf="${i}:capacidade" type="number" value="${v.capacidade}" style="width:90px"></td>
         <td class="n"><input data-vf="${i}:consumo" type="number" step="0.1" value="${v.consumo}" style="width:80px"></td>
         <td><select data-vf="${i}:combustivel"><option value="gasolina" ${v.combustivel !== 'diesel' ? 'selected' : ''}>gasolina</option><option value="diesel" ${v.combustivel === 'diesel' ? 'selected' : ''}>diesel</option></select></td>
@@ -805,7 +831,7 @@
   $('addVeic').onclick = () => {
     const k = st.veiculos.length + 1;
     let id = 'v' + k; while (st.veiculos.some(v => v.id === id)) id += 'b';
-    st.veiculos.push({ id, nome: `Veículo ${k}`, placa: '', capacidade: 1000, consumo: 8, combustivel: 'gasolina', tipos: ['saude', 'industrial'] });
+    st.veiculos.push({ id, nome: `Veículo ${k}`, placa: '', motorista: '', capacidade: 1000, consumo: 8, combustivel: 'gasolina', tipos: ['saude', 'industrial'] });
     st.plano = null; salvar(); renderTudo();
   };
   $('indAdd').onclick = async () => {
@@ -1050,7 +1076,7 @@
       if (res.veiculosPlacas.length) {
         st.veiculos = res.veiculosPlacas.map((p, i) => {
           const ex = st.veiculos.find(v => v.placa === p);
-          return ex || { id: 'v' + (i + 1) + '_' + p, nome: p, placa: p, capacidade: 1500, consumo: 8, combustivel: 'gasolina', tipos: ['saude', 'industrial'] };
+          return ex || { id: 'v' + (i + 1) + '_' + p, nome: p, placa: p, motorista: M.MOTORISTAS[p] || '', capacidade: 1500, consumo: 8, combustivel: 'gasolina', tipos: ['saude', 'industrial'] };
         });
       }
       st.plano = null; st.confirmados = {}; st.avulsas = []; st.indisponibilidades = []; st.params.hoje = hojeReal();

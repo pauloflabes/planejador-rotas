@@ -91,12 +91,17 @@
       if (p.tempoDiario < 60) p.tempoDiario = 60;
       st.migr3 = true;
     }
-    st.veiculos.forEach(v => { if (!v.combustivel) v.combustivel = 'gasolina'; });
+    st.veiculos.forEach(v => {
+      if (!v.combustivel) v.combustivel = 'gasolina';
+      if (v.motorista === undefined) v.motorista = MOTORISTAS[v.placa] || '';
+    });
     return st;
   }
 
   // Parâmetros de cálculo (valores padrão). Tempo de parada e velocidade calibrados com as coletas de set–out/2026
   // (≈5,7 min por parada e ≈39 km/h entre paradas; ≈1h20 até Araxá), arredondados para o lado conservador.
+  // nome do motorista como aparece no meuResíduo (usado só no envio da rota)
+  const MOTORISTAS = { CPN3G98: 'FABIANO', RUV0C87: 'SIDINEY' };   // só o primeiro nome: este código é público
   const PARAMS_PADRAO = {
     precoGasolina: 6.39, precoDiesel: 6.29, jornadaH: 7, jornadaAlvoH: 6, Pfolga: 0.5, tempoParada: 6, velUrbana: 35, velRodovia: 85, tempoGaragem: 0,
     aviso: 5, penMudancaProx: 8, penMudancaLonge: 1.5, Pcap: 50, Ptime: 50, Pun: 400, Pgap: 4, Patraso: 150, atrasoMax: 5,
@@ -397,7 +402,20 @@
     return { n, dist, time, coords };
   }
 
-  const api = { PARAMS_PADRAO, migrar, tempoDesloc, precoComb, servicoDe, temCoord, matrizIds, dnum, dstr, wday, fmtCurto, fmtData, DIAS_SEM, FREQ, PADROES_2X, feriadosPadrao, haversine, estimativa, estadoInicial, calendario, montarProblema, aplicarResultado, ultimoConfirmado, GARAGEM };
+  // Descrição da rota no meuResíduo: cidade e dia; com várias cidades, a que tem mais clientes vem primeiro.
+  function descricaoRota(cidades, data) {
+    const cont = new Map();
+    cidades.forEach(c => {
+      const nome = String(c || '').trim();
+      if (!nome) return;
+      const k = nome.normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
+      if (cont.has(k)) cont.get(k).n++; else cont.set(k, { nome, n: 1 });
+    });
+    const nomes = [...cont.values()].sort((a, b) => b.n - a.n).map(e => e.nome);
+    return (nomes.length ? nomes.join(' / ') + ' - ' : '') + data;
+  }
+
+  const api = { PARAMS_PADRAO, MOTORISTAS, descricaoRota, migrar, tempoDesloc, precoComb, servicoDe, temCoord, matrizIds, dnum, dstr, wday, fmtCurto, fmtData, DIAS_SEM, FREQ, PADROES_2X, feriadosPadrao, haversine, estimativa, estadoInicial, calendario, montarProblema, aplicarResultado, ultimoConfirmado, GARAGEM };
   root.Modelo = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

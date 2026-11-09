@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Planejamento de Rotas → meuResíduo",
+  "version": "1.0.0",
+  "description": "Preenche o formulário de nova rota do meuResíduo com a rota confirmada no Planejamento de Rotas. Nunca clica em Salvar.",
+  "permissions": ["storage"],
+  "host_permissions": ["https://app.meuresiduo.com/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://pauloflabes.github.io/planejador-rotas/*",
+        "http://localhost:8765/*",
+        "http://127.0.0.1:8765/*"
+      ],
+      "js": ["ponte-planejador.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://app.meuresiduo.com/CollectionOrder/getForm*"],
+      "js": ["preenchedor.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://app.meuresiduo.com/CollectionOrder/getForm*"],
+      "js": ["ponte-meuresiduo.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

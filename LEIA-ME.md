@@ -34,5 +34,18 @@ Otimização de rotas periódicas (PVRP) que roda inteiramente no navegador. Nã
 
 Para reimportar depois (relatórios novos), repita o passo 1: coordenadas, tolerâncias e ativações manuais são preservadas.
 
+## Enviar a rota confirmada ao meuResíduo
+A extensão fica na pasta `extensao-meuresiduo/` e funciona no Chrome e no Edge.
+
+**Instalar:** abra `chrome://extensions` (ou `edge://extensions`), ligue o **Modo do desenvolvedor**, clique em **Carregar sem compactação** e escolha a pasta `extensao-meuresiduo`. Recarregue o Planejamento de Rotas.
+
+**Usar:**
+1. Faça login no meuResíduo.
+2. No planejador, abra o dia confirmado e clique em **Enviar ao meuResíduo** na rota do veículo.
+3. A extensão abre um formulário novo e preenche instruções, clientes na ordem do planejador, origem (Empresa), destino (SERQUIP Uberlândia), retorno (Empresa) e motorista. A descrição da rota é a cidade e o dia (com mais de uma cidade, todas são listadas, começando pela que tem mais clientes). A aba Resíduo fica em branco.
+4. Confira o resumo no canto da tela e as 5 abas. **Quem clica em Salvar é sempre você.**
+
+A extensão nunca marca "Emitir MTR ao gerar a Rota" e nunca usa "Otimizar Rota". O motorista de cada veículo fica em **Configurações → Veículos**, com o nome igual ao do meuResíduo. Clientes criados só no planejador não têm código do meuResíduo e ficam fora do envio, com aviso.
+
 ## Privacidade
 Os dados reais ficam só no navegador (e no Supabase, se configurado). **Nunca publique** a pasta `dados-privados/`, planilhas ou backups `.json` no GitHub: o `.gitignore` já os exclui.
