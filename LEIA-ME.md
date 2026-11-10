@@ -20,7 +20,11 @@ Otimização de rotas periódicas (PVRP) que roda inteiramente no navegador. Nã
 3. **Avançar dia ▸** só existe para simular a passagem dos dias no protótipo.
 
 ## Modelo (resumo)
-- Tolerâncias padrão: semanal ±1, quinzenal ±2, mensal ±4, bimestral ±6 dias (ajustáveis por cliente). 2x/semana usa seg+qui ou ter+sex.
+- Tolerâncias padrão: semanal ±1, quinzenal ±2, mensal ±4, bimestral ±6 dias (ajustáveis por cliente).
+- 2x/semana: o otimizador escolhe entre seg+qua, ter+qui ou qua+sex. Se um dia for feriado, a coleta vai para outro dia útil da mesma semana (de preferência sem encostar na outra coleta), e a semana fica com duas coletas sempre que tiver ao menos dois dias úteis.
+- Cliente semanal tem no máximo uma coleta por semana (segunda a sábado). Se o feriado tirar todas as datas da tolerância, a coleta vai para o dia útil mais próximo da mesma semana. Se não couber na semana (ex.: veículo parado), ela aparece como não alocada e a coleta da semana seguinte faz o atendimento.
+- Cliente mensal tem uma coleta em cada mês, perto do mesmo dia da última coleta. Cliente quinzenal coleta em semanas alternadas (semana sim, semana não), a partir da semana da última coleta. As tolerâncias valem dentro do mês ou da semana, e o que não couber aparece como não alocado.
+- Coleta avulsa sempre substitui uma coleta programada, em qualquer frequência: na mesma semana (semanal), no mesmo mês (mensal), a mais próxima da mesma semana (2x), a do mesmo dia (diário) ou a mais próxima (quinzenal, bimestral, trimestral, semestral, com o ciclo continuando a partir da avulsa). A janela precisa ter ao menos um dia útil, e o mesmo cliente nunca aparece duas vezes na rota do dia.
 - O custo é o combustível (km × diesel ÷ consumo de cada veículo) mais penalidades: jornada, capacidade, intervalo entre coletas, atraso, mudança de data já comunicada e visita não programada.
 - Feriados nacionais e da cidade-base param a frota. Feriados de outras cidades só bloqueiam os clientes daquela cidade.
 

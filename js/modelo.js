@@ -51,7 +51,7 @@
     diario: { nome: 'Diário (dias úteis)', intervalo: 1, tol: 0 },
     demanda: { nome: 'Conforme necessidade', intervalo: null, tol: 0 },
   };
-  const PADROES_2X = [[1, 4], [2, 5]]; // seg+qui, ter+sex
+  const PADROES_2X = [[1, 3], [2, 4], [3, 5]]; // seg+qua, ter+qui, qua+sex (o otimizador escolhe)
 
   // ---------------------------------------------------------------- distâncias
   function haversine(a, b) {
@@ -156,6 +156,131 @@
     return ks.length ? ks[ks.length - 1] : null;
   }
 
+  // ---------------------------------------------------------------- mês de calendário
+  // Mensal: uma coleta em cada mês. Quinzenal: semanas alternadas (semana sim, semana não).
+  const POR_CALENDARIO = { quinzenal: true, mensal: true };
+  const semanaDe = (n) => n - ((wday(n) + 6) % 7);
+
+  // Quinzenal: as coletas ficam sempre duas semanas de calendário uma da outra, a partir da semana da última coleta.
+  function alvosAlternados(c, tol, ini, fim, primeiroUtil) {
+    const pu = primeiroUtil === undefined ? ini : primeiroUtil;
+    const ult = c.ultimaColeta ? dnum(c.ultimaColeta) : null;
+    const comeco = ult === null && c.inicio ? dnum(c.inicio) : null;
+    let alvo, tolA;
+    if (ult !== null) { alvo = ult + 14; tolA = tol; }
+    else if (comeco !== null) { alvo = comeco; tolA = 0; }
+    else {
+      // sem histórico: metade dos clientes começa uma semana depois, para equilibrar as semanas alternadas
+      const soma = String(c.id).split('').reduce((s, ch) => s + ch.charCodeAt(0), 0);
+      alvo = ini + 5 + 7 * (soma % 2); tolA = 5;
+    }
+    let atrasado = false;
+    if (alvo + tolA < ini || semanaDe(alvo) + 6 < pu) { alvo = pu; tolA = Math.max(2, tol); atrasado = true; }
+    const bloco = (n) => ({ de: semanaDe(n), ate: semanaDe(n) + 6 });
+    const alvos = [];
+    if (alvo <= fim) alvos.push({ alvo, tol: tolA, atrasado, per: bloco(alvo) });
+    for (let n = alvo + 14; n <= fim; n += 14) alvos.push({ alvo: n, tol, atrasado: false, per: bloco(n) });
+    return alvos;
+  }
+
+  // Avulsa pendente (quinzenal, bimestral, trimestral, semestral): ela ocupa o lugar da coleta programada mais próxima
+  // e o ciclo continua a partir dela. Se a mais próxima for a de depois do horizonte, nada sai do plano agora
+  // (o ciclo é recalculado quando a avulsa for confirmada).
+  function substituirMaisProxima(alvos, pend, I, tol, fim, porSemana) {
+    for (const x of pend.slice().sort((a, b) => a.ns[0] - b.ns[0])) {
+      if (x.bloco) continue;
+      const n0 = x.ns[0];
+      let i = -1, melhor = Infinity;
+      alvos.forEach((a, k) => { if (a.sub) return; const dd = Math.abs(a.alvo - n0); if (dd < melhor) { melhor = dd; i = k; } });
+      if (i >= 0 && Math.abs(alvos[alvos.length - 1].alvo + I - n0) < melhor) i = -1;
+      if (i < 0) continue;
+      x.subAlvo = Math.round(alvos[i].alvo);
+      const bloco = (n) => (porSemana ? { de: semanaDe(n), ate: semanaDe(n) + 6 } : null);
+      x.bloco = porSemana ? [semanaDe(n0), Math.min(semanaDe(n0) + 6, fim)] : [x.ns[0], x.ns[x.ns.length - 1]];
+      const novos = [{ alvo: n0, tol, atrasado: false, per: bloco(n0), sub: x }];
+      for (let n = n0 + I; n <= fim; n += I) novos.push({ alvo: n, tol, atrasado: false, per: bloco(n) });
+      alvos = alvos.slice(0, i).concat(novos);
+    }
+    return alvos;
+  }
+
+  // 2x por semana: dias do par em cada semana. Se o dia não for útil (feriado), usa outro dia útil da mesma semana,
+  // de preferência sem encostar na outra coleta e o mais perto possível do dia original.
+  // Assim ficam duas coletas sempre que a semana tiver ao menos dois dias úteis.
+  function diasPadrao2x(pad, ini, fim, util, sabado) {
+    const out = [];
+    const menor = (a, b) => { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i]; return false; };
+    for (let seg = semanaDe(ini); seg <= fim; seg += 7) {
+      const ultimo = Math.min(seg + 4 + (sabado ? 1 : 0), fim);
+      const orig = pad.map(wd => seg + wd - 1);
+      const alvos = orig.filter(n => n >= ini && n <= fim);    // dias do par que ainda cabem no horizonte
+      if (!alvos.length) continue;
+      const livres = [];
+      for (let x = Math.max(seg, ini); x <= ultimo; x++) if (util(x)) livres.push(x);
+      // compara todas as combinações: mantém os dias originais úteis, evita dias seguidos e desloca o mínimo
+      const fora = orig.filter(n => n < ini);                  // dia do par que já passou nesta semana
+      let melhor = null, chaveMelhor = null;
+      const avaliar = (sel) => {
+        const mantidos = sel.filter(n => alvos.includes(n)).length;
+        const todos = sel.concat(fora).sort((a, b) => a - b);
+        let seguidos = 0; for (let i = 1; i < todos.length; i++) if (todos[i] - todos[i - 1] === 1) seguidos++;
+        const desloc = sel.reduce((s, n, i) => s + Math.abs(n - alvos[i]), 0);
+        const antes = sel.reduce((s, n, i) => s + (n < alvos[i] ? 1 : 0), 0);
+        const chave = [-sel.length, -mantidos, seguidos, desloc, antes];
+        if (!chaveMelhor || menor(chave, chaveMelhor)) { melhor = sel; chaveMelhor = chave; }
+      };
+      if (alvos.length === 2) {
+        for (let i = 0; i < livres.length; i++) for (let j = i + 1; j < livres.length; j++) avaliar([livres[i], livres[j]]);
+      }
+      if (!melhor) livres.forEach(x => avaliar([x]));
+      if (melhor) out.push(...melhor);
+    }
+    return out.sort((a, b) => a - b);
+  }
+
+  function periodosCalendario(ini, fim) {
+    const out = [];
+    const d0 = new Date(ini * MS_DIA);
+    for (let y = d0.getUTCFullYear(), m = d0.getUTCMonth(); ; m++) {
+      const mes = Math.round(Date.UTC(y, m, 1) / MS_DIA);
+      if (mes > fim) break;
+      const ultimo = Math.round(Date.UTC(y, m + 1, 0) / MS_DIA);
+      const dias = ultimo - mes + 1;
+      out.push({ de: mes, ate: ultimo, mes, dias });
+    }
+    return out;
+  }
+
+  // Mensal: mantém o dia habitual do cliente. O mês em que a última coleta já ocorreu fica atendido e não recebe outra.
+  function alvosPorCalendario(c, tol, ini, fim, primeiroUtil) {
+    if (c.freq === 'quinzenal') return alvosAlternados(c, tol, ini, fim, primeiroUtil);
+    const ult = c.ultimaColeta ? dnum(c.ultimaColeta) : null;
+    const comeco = ult === null && c.inicio ? dnum(c.inicio) : null;
+    const ref = ult !== null ? ult : (comeco !== null ? comeco : ini + 5);
+    const diaRef = new Date(ref * MS_DIA).getUTCDate();
+    const alvos = [];
+    for (const per of periodosCalendario(ini, fim)) {
+      if (per.ate < ini) continue;
+      if (ult !== null && ult >= per.de && ult <= per.ate) continue;
+      if (ult === null && per.ate < ref) continue;
+      const dia = Math.min(diaRef, per.dias);
+      let alvo = per.mes + dia - 1, tolA = tol, atrasado = false;
+      if (ult === null && ref >= per.de && ref <= per.ate) { alvo = ref; tolA = comeco !== null ? 0 : 5; }
+      if (alvo > fim) continue;
+      if (alvo + tolA < ini) { alvo = ini; tolA = Math.max(2, tol); atrasado = true; }
+      alvos.push({ alvo, tol: tolA, atrasado, per });
+    }
+    return alvos;
+  }
+
+  // Semana, quinzena ou mês a que uma data pertence (null para as demais frequências).
+  const SUBSTITUI_AVULSA = { semanal: true, quinzenal: true, mensal: true };
+  function periodoDe(freq, n) {
+    if (!SUBSTITUI_AVULSA[freq]) return null;
+    if (freq === 'semanal' || freq === 'quinzenal') { const de = semanaDe(n); return { de, ate: de + 6 }; }
+    return periodosCalendario(n, n).find(p => n >= p.de && n <= p.ate);
+  }
+
   // ---------------------------------------------------------------- montagem do problema
   function montarProblema(st, matriz) {
     const p = st.params;
@@ -222,6 +347,24 @@
     const locOf = new Map(clientes.map((c, i) => [c.id, i + 1]));
     function mudPen(d) { return d < aviso ? p.penMudancaProx : p.penMudancaLonge; }
 
+    // coletas avulsas pendentes: dias úteis possíveis de cada uma
+    const pendentes = new Map();
+    for (const av of st.avulsas || []) {
+      if (av.status === 'feita') continue;
+      const c = st.clientes.find(x => x.id === av.clienteId);
+      if (!c || !locOf.has(c.id)) continue;
+      const util = (n) => { const s = dstr(n); return cal.diaUtilCliente(s, c.cidade) && idxDia.has(s); };
+      let ns = [];
+      for (let x = Math.max(dnum(av.de), ini); x <= Math.min(dnum(av.ate), fim); x++) if (util(x)) ns.push(x);
+      if (!ns.length && dnum(av.ate) < ini) {       // prazo já vencido: primeiro dia útil possível
+        const d = dias.find(s => cal.diaUtilCliente(s, c.cidade));
+        if (d) ns = [dnum(d)];
+      }
+      if (!ns.length) continue;                     // janela sem dia útil dentro do horizonte
+      if (!pendentes.has(c.id)) pendentes.set(c.id, []);
+      pendentes.get(c.id).push({ av, c, ns, bloco: null });
+    }
+
     for (const c of clientes) {
       const loc = locOf.get(c.id);
       const allowedV = st.veiculos.map(v => (v.tipos || []).includes(c.tipo) ? 1 : 0);
@@ -231,7 +374,13 @@
       const f = FREQ[c.freq];
       if (!f) continue;
       if (c.freq === 'diario') {
-        const ds = dias.map((s, i) => [s, i]).filter(([s]) => okDia(s)).map(x => x[1]);
+        let ds = dias.map((s, i) => [s, i]).filter(([s]) => okDia(s)).map(x => x[1]);
+        // avulsa: substitui a coleta diária daquele dia
+        for (const x of pendentes.get(c.id) || []) {
+          if (x.bloco) continue;
+          x.bloco = [x.ns[0], x.ns[0]]; x.subAlvo = x.ns[0];
+          ds = ds.filter(d => d !== idxDia.get(dstr(x.ns[0])));
+        }
         if (!ds.length) continue;
         const init = prev.length ? { opt: 0, v: ds.map(d => { const x = prev.find(y => y.d === d); return x ? x.v : -1; }), ord: ds.map(d => { const x = prev.find(y => y.d === d); return x ? x.ord : 0; }) } : null;
         tasks.push({ loc, dem: c.kg, svc: servicoDe(c, p), options: [ds], allowedV, prevOpt: -1, changePen: 0, chainPrev: -1, chainNext: -1, gapMin: 0, gapMax: 1e9, targetOpt: 0, init });
@@ -239,25 +388,20 @@
         continue;
       }
       if (c.freq === '2x') {
+        // avulsa: substitui a coleta mais próxima da mesma semana (a semana continua com duas coletas)
+        const avs2x = (pendentes.get(c.id) || []).filter(x => !x.bloco);
+        avs2x.forEach(x => { const de = semanaDe(x.ns[0]); x.bloco = [de, Math.min(de + 6, fim)]; x.subAlvo = x.ns[0]; });
+        const util = (n) => okDia(dstr(n)) && idxDia.has(dstr(n));
         const opts = [];
         for (const pad of PADROES_2X) {
-          const set = [];
-          // percorre semanas (segunda-feira de cada semana)
-          let seg = ini - ((wday(ini) + 6) % 7);
-          for (; seg <= fim; seg += 7) {
-            const usados = new Set();
-            const ultimoDiaSem = seg + 4 + (p.sabado ? 1 : 0);
-            for (const wd of pad) {
-              let nn = seg + wd - 1;
-              if (nn < ini || nn > fim) continue;
-              // feriado: empurra para o próximo dia útil da mesma semana
-              while (nn <= ultimoDiaSem && (!okDia(dstr(nn)) || usados.has(nn))) nn++;
-              if (nn > ultimoDiaSem || nn > fim || !idxDia.has(dstr(nn))) continue;
-              usados.add(nn);
-              set.push(idxDia.get(dstr(nn)));
-            }
+          let set = diasPadrao2x(pad, ini, fim, util, p.sabado);
+          for (const x of avs2x) {
+            const daSemana = set.filter(n => n >= x.bloco[0] && n <= x.bloco[1]);
+            if (!daSemana.length) continue;
+            const tirar = daSemana.reduce((m, n) => (Math.abs(n - x.ns[0]) < Math.abs(m - x.ns[0]) ? n : m));
+            set = set.filter(n => n !== tirar);
           }
-          opts.push(set.sort((a, b) => a - b));
+          opts.push(set.map(n => idxDia.get(dstr(n))));
         }
         const optsNE = opts.filter(o => o.length);
         if (!optsNE.length) continue;
@@ -284,7 +428,11 @@
       const I = f.intervalo, tol = (c.tol !== null && c.tol !== undefined && c.tol !== '') ? Number(c.tol) : f.tol;
       // âncora
       let alvos = [];
-      if (c.ultimaColeta) {
+      if (POR_CALENDARIO[c.freq]) {
+        const primeiro = dias.find(okDia);
+        alvos = alvosPorCalendario(c, tol, ini, fim, primeiro ? dnum(primeiro) : ini);
+        if (c.freq === 'quinzenal' && pendentes.has(c.id)) alvos = substituirMaisProxima(alvos, pendentes.get(c.id), 14, tol, fim, true);
+      } else if (c.ultimaColeta) {
         let anc = dnum(c.ultimaColeta);
         if (anc + I + tol < ini) anc = ini - I; // atrasado: primeira coleta já no 1º dia
         for (let k = 1; anc + k * I <= fim; k++) alvos.push({ alvo: anc + k * I, tol: k === 1 && anc === ini - I ? Math.max(2, tol) : tol, atrasado: k === 1 && anc === ini - I });
@@ -295,22 +443,62 @@
         // sem histórico: primeira coleta nos próximos dias, livre dentro de um intervalo
         for (let k = 0; ini + k * I <= fim; k++) alvos.push({ alvo: ini + Math.min(I, 10) / 2 + k * I, tol: k === 0 ? Math.ceil(Math.min(I, 10) / 2) : tol });
       }
-      let prevTask = -1;
+      const semanal = c.freq === 'semanal';
+      if (!POR_CALENDARIO[c.freq] && !semanal && pendentes.has(c.id)) alvos = substituirMaisProxima(alvos, pendentes.get(c.id), I, tol, fim, false);
+      let prevTask = -1, alvoAnterior = null;
       const usadosPrev = new Set();
       for (const a of alvos) {
+        if (a.sub) { prevTask = -1; alvoAnterior = null; continue; }   // quinzenal: a avulsa ocupa este lugar
         const alvo = Math.round(a.alvo);
         let lo = Math.max(alvo - a.tol, ini), hi = Math.min(alvo + a.tol, fim);
+        // Semanal: no máximo uma coleta por semana. Quinzenal e mensal: uma por período do mês.
+        // Todas as datas possíveis ficam dentro do período da data-alvo.
+        const segAlvo = alvo - ((wday(alvo) + 6) % 7);
+        const inicioBloco = a.per ? a.per.de : segAlvo;
+        const fimBloco = Math.min(a.per ? a.per.ate : segAlvo + 6, fim);
+        const limitado = semanal || !!a.per;
+        if (limitado) {
+          // Avulsa no mesmo período: ela substitui a coleta programada, e fica uma coleta só.
+          const sub = (pendentes.get(c.id) || []).find(x => !x.bloco && x.ns.some(n => n >= inicioBloco && n <= fimBloco));
+          if (sub) { sub.bloco = [inicioBloco, fimBloco]; sub.subAlvo = alvo; prevTask = -1; alvoAnterior = null; continue; }
+          lo = Math.max(lo, inicioBloco); hi = Math.min(hi, fimBloco);
+        }
         let ds = [];
         const coletar = () => { ds = []; for (let x = lo; x <= hi; x++) { const s = dstr(x); if (okDia(s) && idxDia.has(s)) ds.push(idxDia.get(s)); } };
         coletar();
-        for (let ext = 0; !ds.length && ext < 4; ext++) { hi = Math.min(hi + 1, fim); if (ext >= 1) lo = Math.max(lo - 1, ini); coletar(); }
+        if (limitado) {
+          // sem dia útil na tolerância (feriados): usa o dia útil mais próximo do mesmo período
+          for (let k = 1; !ds.length && k <= 31; k++) {
+            for (const x of [alvo - k, alvo + k]) {
+              if (x < Math.max(inicioBloco, ini) || x > fimBloco) continue;
+              const s = dstr(x);
+              if (okDia(s) && idxDia.has(s)) { ds.push(idxDia.get(s)); hi = x; }
+            }
+          }
+        } else {
+          for (let ext = 0; !ds.length && ext < 4; ext++) { hi = Math.min(hi + 1, fim); if (ext >= 1) lo = Math.max(lo - 1, ini); coletar(); }
+        }
         if (!ds.length) continue;
-        // opções de atraso (só usadas se necessário, ex.: veículo parado), com penalidade por dia útil
+        // opções de atraso (só usadas se necessário, ex.: veículo parado), com penalidade por dia útil.
+        // O atraso não passa do período; se não couber, a coleta fica não alocada e a do período seguinte faz o atendimento.
         const optPen = ds.map(() => 0);
         let extra = 0;
-        for (let x = hi + 1; x <= fim && extra < (p.atrasoMax || 0); x++) {
+        const limiteAtraso = limitado ? fimBloco : fim;
+        // Mês e quinzena: como último recurso aceita qualquer dia útil do período, sempre mais barato que perder a coleta.
+        const penFora = (n) => (a.per ? Math.min(n * p.Patraso, p.Pun * 0.75 + n) : n * p.Patraso);
+        const maxExtra = a.per ? Infinity : (p.atrasoMax || 0);
+        for (let x = hi + 1; x <= limiteAtraso && extra < maxExtra; x++) {
           const s = dstr(x);
-          if (okDia(s) && idxDia.has(s)) { extra++; ds.push(idxDia.get(s)); optPen.push(extra * p.Patraso); }
+          if (okDia(s) && idxDia.has(s)) { extra++; ds.push(idxDia.get(s)); optPen.push(penFora(extra)); }
+        }
+        if (a.per) {
+          let antes = 0;
+          for (let x = lo - 1; x >= Math.max(inicioBloco, ini); x--) {
+            const s = dstr(x);
+            if (!okDia(s) || !idxDia.has(s) || ds.includes(idxDia.get(s))) continue;
+            antes++; ds.unshift(idxDia.get(s)); optPen.unshift(penFora(antes));
+          }
+          extra += antes;
         }
         let targetOpt = 0, bd = 1e9;
         ds.forEach((d, i) => { const dd = Math.abs(dayNum[d] - alvo); if (dd < bd) { bd = dd; targetOpt = i; } });
@@ -326,29 +514,27 @@
         }
         if (bp) { usadosPrev.add(bp); prevOpt = ds.indexOf(bp.d); init = { opt: prevOpt, v: [bp.v], ord: [bp.ord] }; }
         const ti = tasks.length;
+        // no calendário o intervalo esperado é a distância real entre as datas-alvo (28 a 31 dias no mês, por exemplo)
+        const sep = a.per && alvoAnterior !== null ? alvo - alvoAnterior : I;
         tasks.push({ loc, dem: c.kg, svc: servicoDe(c, p), options: ds.map(d => [d]), allowedV, prevOpt,
           changePen: prevOpt >= 0 ? mudPen(ds[prevOpt]) : 0, chainPrev: prevTask, chainNext: -1,
-          gapMin: I - tol, gapMax: I + tol, targetOpt, init, optPen: extra ? optPen : null });
+          gapMin: sep - tol, gapMax: sep + tol, targetOpt, init, optPen: extra ? optPen : null });
         if (prevTask >= 0) tasks[prevTask].chainNext = ti;
         prevTask = ti;
+        alvoAnterior = alvo;
         meta.push({ clienteId: c.id, tipo: 'periodica', alvo: dstr(alvo), atrasado: !!a.atrasado });
       }
     }
 
     // coletas avulsas (conforme necessidade / extras)
-    for (const av of st.avulsas || []) {
-      if (av.status === 'feita') continue;
-      const c = st.clientes.find(x => x.id === av.clienteId);
-      if (!c || !locOf.has(c.id)) continue;
-      const ds = [];
-      for (let x = Math.max(dnum(av.de), ini); x <= Math.min(dnum(av.ate), fim); x++) { const s = dstr(x); if (cal.diaUtilCliente(s, c.cidade) && idxDia.has(s)) ds.push(idxDia.get(s)); }
-      if (!ds.length) ds.push(0);
+    for (const { av, c, ns, bloco, subAlvo } of [].concat(...pendentes.values())) {
+      const ds = ns.filter(n => !bloco || (n >= bloco[0] && n <= bloco[1])).map(n => idxDia.get(dstr(n)));
       const prev = (prevIdx.get(c.id) || []).find(x => ds.includes(x.d));
       const prevOpt = prev ? ds.indexOf(prev.d) : -1;
       tasks.push({ loc: locOf.get(c.id), dem: Number(av.kg || c.kg), svc: servicoDe(c, p), options: ds.map(d => [d]), allowedV: st.veiculos.map(v => (v.tipos || []).includes(c.tipo) ? 1 : 0),
         prevOpt, changePen: prevOpt >= 0 ? mudPen(ds[prevOpt]) : 0, chainPrev: -1, chainNext: -1, gapMin: 0, gapMax: 1e9, targetOpt: 0,
         init: prev ? { opt: prevOpt, v: [prev.v], ord: [prev.ord] } : null });
-      meta.push({ clienteId: c.id, tipo: 'avulsa', avulsaId: av.id });
+      meta.push({ clienteId: c.id, tipo: 'avulsa', avulsaId: av.id, substitui: subAlvo !== undefined ? dstr(subAlvo) : null });
     }
 
     const P = {
@@ -362,10 +548,21 @@
   function aplicarResultado(st, prob, res) {
     const { dias, ids, meta, P } = prob;
     const planoDias = {};
+    const vistosDia = new Map();
     for (const r of res.routes) {
       const dia = dias[r.d];
       if (!planoDias[dia]) planoDias[dia] = st.veiculos.map(v => ({ veiculoId: v.id, clientes: [], km: 0, min: 0, kg: 0, combustivel: 0 }));
-      planoDias[dia][r.v] = { veiculoId: st.veiculos[r.v].id, clientes: r.tasks.map(t => ids[P.tasks[t].loc]), km: r.km, min: r.min, kg: r.load, combustivel: r.fuel, extraMin: r.overMin, extraKg: r.overKg };
+      // o mesmo cliente nunca entra duas vezes no mesmo dia (ex.: avulsa de cliente 2x por semana)
+      const vistos = vistosDia.get(dia) || new Set();
+      vistosDia.set(dia, vistos);
+      const clientes = [];
+      let min = r.min, kg = r.load;
+      for (const t of r.tasks) {
+        const cid = ids[P.tasks[t].loc];
+        if (vistos.has(cid)) { min -= P.tasks[t].svc; kg -= P.tasks[t].dem; continue; }
+        vistos.add(cid); clientes.push(cid);
+      }
+      planoDias[dia][r.v] = { veiculoId: st.veiculos[r.v].id, clientes, km: r.km, min, kg, combustivel: r.fuel, extraMin: r.overMin, extraKg: r.overKg };
     }
     const naoAlocadas = res.unassigned.map(t => ({ clienteId: meta[t].clienteId, janela: [dias[P.tasks[t].options[0][0]], dias[P.tasks[t].options[P.tasks[t].options.length - 1][0]]], tipo: meta[t].tipo }));
     st.plano = {
@@ -415,7 +612,7 @@
     return (nomes.length ? nomes.join(' / ') + ' - ' : '') + data;
   }
 
-  const api = { PARAMS_PADRAO, MOTORISTAS, descricaoRota, migrar, tempoDesloc, precoComb, servicoDe, temCoord, matrizIds, dnum, dstr, wday, fmtCurto, fmtData, DIAS_SEM, FREQ, PADROES_2X, feriadosPadrao, haversine, estimativa, estadoInicial, calendario, montarProblema, aplicarResultado, ultimoConfirmado, GARAGEM };
+  const api = { PARAMS_PADRAO, MOTORISTAS, descricaoRota, POR_CALENDARIO, alvosPorCalendario, periodoDe, diasPadrao2x, migrar, tempoDesloc, precoComb, servicoDe, temCoord, matrizIds, dnum, dstr, wday, fmtCurto, fmtData, DIAS_SEM, FREQ, PADROES_2X, feriadosPadrao, haversine, estimativa, estadoInicial, calendario, montarProblema, aplicarResultado, ultimoConfirmado, GARAGEM };
   root.Modelo = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

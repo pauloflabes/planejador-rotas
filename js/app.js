@@ -726,7 +726,8 @@
     const out = [];
     if (c.freq === '2x') {
       M.PADROES_2X.forEach(pad => {
-        const ds = dias.map((d, i) => [d, i]).filter(([d]) => pad.includes(M.wday(M.dnum(d))) && ok(d)).map(x => x[1]);
+        const util = (n) => ok(M.dstr(n)) && idx.has(M.dstr(n));
+        const ds = M.diasPadrao2x(pad, M.dnum(dias[0]), M.dnum(dias[dias.length - 1]), util, st.params.sabado).map(n => idx.get(M.dstr(n)));
         out.push({ rotulo: pad.map(w => M.DIAS_SEM[w]).join(' e '), inicio: null, days: ds });
       });
     } else if (c.freq === 'demanda') {
@@ -737,12 +738,26 @@
       const starts = dias.filter(ok).slice(0, Math.min(Math.round(I), 25));
       for (const s of starts) {
         const ds = [];
+        if (M.POR_CALENDARIO[c.freq]) {
+          const alvos = M.alvosPorCalendario(Object.assign({}, c, { ultimaColeta: null, inicio: s }), tol, M.dnum(dias[0]), fim);
+          for (const a of alvos) {
+            let achou = -1;
+            for (let e = 0; e <= 31 && achou < 0; e++) for (const sg of e ? [-1, 1] : [0]) {
+              const n = a.alvo + sg * e, x = M.dstr(n);
+              if (achou < 0 && n >= a.per.de && n <= a.per.ate && ok(x) && idx.has(x)) achou = idx.get(x);
+            }
+            if (achou >= 0) ds.push(achou);
+          }
+          out.push({ rotulo: `Início em ${M.fmtCurto(s)}`, inicio: s, days: ds });
+          continue;
+        }
         for (let k = 0; M.dnum(s) + k * I <= fim; k++) {
           const alvo = Math.round(M.dnum(s) + k * I);
           let achou = -1;
           for (let e = 0; e <= Math.max(tol, 3) && achou < 0; e++) for (const sg of e ? [1, -1] : [0]) {
             const x = M.dstr(alvo + sg * e);
-            if (achou < 0 && ok(x) && idx.has(x) && (k === 0 ? x === s : true)) achou = idx.get(x);
+            const naSemana = c.freq !== 'semanal' || (M.dnum(x) - ((M.wday(M.dnum(x)) + 6) % 7)) === (alvo - ((M.wday(alvo) + 6) % 7));
+            if (achou < 0 && ok(x) && idx.has(x) && naSemana && (k === 0 ? x === s : true)) achou = idx.get(x);
           }
           if (achou >= 0) ds.push(achou);
         }
@@ -851,7 +866,8 @@
     $('avLista').innerHTML = st.avulsas.length ? `<table><tr><th>Cliente</th><th>Janela</th><th>Situação</th><th></th></tr>${st.avulsas.slice().reverse().map(a => {
       const i = st.avulsas.indexOf(a);
       const pl = (prox.get(a.clienteId) || []).find(d => d >= a.de && d <= a.ate);
-      const sit = a.status === 'feita' ? `<span class="ok">feita em ${M.fmtData(a.feitaEm)}</span>` : pl ? `programada para ${M.fmtCurto(pl)}` : '<span class="warn">aguardando otimização</span>';
+      const sit = (a.status === 'feita' ? `<span class="ok">feita em ${M.fmtData(a.feitaEm)}</span>` : pl ? `programada para ${M.fmtCurto(pl)}` : '<span class="warn">aguardando otimização</span>')
+        + (a.substitui ? ` <span class="small muted">· substitui a coleta de ${M.fmtCurto(a.substitui)}</span>` : '');
       return `<tr><td>${esc(nomeCli(a.clienteId))}</td><td>${M.fmtData(a.de)} a ${M.fmtData(a.ate)}</td><td>${sit}</td><td>${a.status !== 'feita' ? `<button class="x" data-ar="${i}">✕</button>` : ''}</td></tr>`;
     }).join('')}</table>` : '<span class="muted">Nenhuma coleta avulsa.</span>';
     $('avLista').querySelectorAll('[data-ar]').forEach(b => b.onclick = () => { st.avulsas.splice(Number(b.dataset.ar), 1); marcarDesatualizado(); renderAvulsas(); });
@@ -861,9 +877,36 @@
     if (!mapCli.has(id)) return alerta('Escolha um cliente da lista.');
     const de = $('avDe').value, ate = $('avAte').value || de;
     if (!de || ate < de) return alerta('Informe a janela.');
-    st.avulsas.push({ id: 'A' + Date.now(), clienteId: id, de, ate, kg: $('avKg').value ? Number($('avKg').value) : null, status: 'pendente' });
+    const c = mapCli.get(id), cal = M.calendario(st), primeiro = proximoRevisar();
+    const uteis = [];
+    for (let n = Math.max(M.dnum(de), primeiro ? M.dnum(primeiro) : -Infinity); n <= M.dnum(ate); n++) if (cal.diaUtilCliente(M.dstr(n), c.cidade)) uteis.push(n);
+    if (!uteis.length) return alerta(`A janela informada não tem dia útil disponível para coleta em ${c.cidade || 'a cidade do cliente'}. Escolha outra data (sem sábado, domingo, feriado ou dia já confirmado).`);
+    if (st.avulsas.some(a => a.clienteId === id && a.status !== 'feita' && a.de <= ate && a.ate >= de)) return alerta('Já existe uma coleta avulsa pendente deste cliente nessa janela.');
+
+    // A avulsa substitui uma coleta programada. Qual delas é o próprio modelo do otimizador que decide;
+    // aqui só se descobre qual, para avisar (a data planejada mais perto da data-alvo substituída).
+    const nova = { id: 'A' + Date.now(), clienteId: id, de, ate, kg: $('avKg').value ? Number($('avKg').value) : null, status: 'pendente' };
+    const previstas = (proximasDatas().get(id) || []).filter(d => !st.confirmados[d]);
+    let substitui = null;
+    const pr = M.montarProblema(Object.assign({}, st, { avulsas: st.avulsas.concat([nova]) }), matriz);
+    const mAv = pr.meta.find(m => m.tipo === 'avulsa' && m.avulsaId === nova.id);
+    if (mAv && mAv.substitui) {
+      const alvo = M.dnum(mAv.substitui);
+      const semana = alvo - ((M.wday(alvo) + 6) % 7);
+      const per = c.freq === '2x' ? { de: semana, ate: semana + 6 } : c.freq === 'diario' ? { de: alvo, ate: alvo } : M.periodoDe(c.freq, alvo);
+      const meio = (M.FREQ[c.freq]?.intervalo || 0) / 2;
+      const cands = previstas.filter(d => per ? (M.dnum(d) >= per.de && M.dnum(d) <= per.ate) : Math.abs(M.dnum(d) - alvo) <= meio);
+      if (cands.length) substitui = cands.reduce((m, d) => (Math.abs(M.dnum(d) - alvo) < Math.abs(M.dnum(m) - alvo) ? d : m));
+    }
+    const per0 = M.periodoDe(c.freq, uteis[0]);
+    if (!substitui && per0 && c.ultimaColeta && M.dnum(c.ultimaColeta) >= per0.de && M.dnum(c.ultimaColeta) <= per0.ate
+      && !confirm(`${nomeCli(id)} já teve coleta em ${M.fmtData(c.ultimaColeta)}, no mesmo período. Incluir a coleta avulsa mesmo assim?`)) return;
+
+    nova.substitui = substitui;
+    st.avulsas.push(nova);
     $('avCli').value = '';
     salvar(); renderAvulsas();
+    if (substitui) alerta(`A coleta programada de ${M.fmtCurto(substitui)} será substituída por esta coleta avulsa.`);
     await otimizar('quente', `Coleta avulsa: ${nomeCli(id)}`);
   };
 
